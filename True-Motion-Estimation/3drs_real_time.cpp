@@ -137,9 +137,10 @@ void oaat(uchar *src, uchar *dist, int *output, int *center, int *block_center, 
 void tdrs_thread(uchar *dsrc, uchar *ddist, int *plmm, int *pmm, int src_rows, int src_cols, int cur_thread, int num_thread)
 {
     int block_size = 8;
-
     int searching_area(64), radius(block_size/2);
     int block_row(src_rows/block_size), block_col(src_cols/block_size);
+
+ 	//cout << "thread num is " << cur_thread << " working" << endl;
 
     for (int r = cur_thread; r < block_row; r += num_thread)
     {
@@ -463,8 +464,8 @@ void tdrs_MC(Mat &src, Mat &dist, Mat &draw, Mat &src_image, Mat &IF_image,int *
     int block_size(8), radius(4);
     int row(src.rows), col(src.cols);
     int block_row(row/block_size), block_col(col/block_size);
-
     int img_size = row * col;
+
     uchar *dsrc, *ddist;
     dsrc = new uchar[img_size];
     memcpy(dsrc, src.data, img_size*sizeof(uchar));
@@ -524,20 +525,23 @@ void tdrs_MC(Mat &src, Mat &dist, Mat &draw, Mat &src_image, Mat &IF_image,int *
 				Point motion(*(last_motion + r*block_col*2 + c*2) , *(last_motion + r*block_col*2 + c*2 + 1));
 				motion.x = int(motion.x*0.5);
 				motion.y = int(motion.y*0.5);
+				//cout << "motion.x/y is " << motion << endl;
 				for (int a = 0; a< block_size; a++)
 				{
 					for (int b = 0; b < block_size; b++)
 					{
-						Point loc_dist(block_row*block_size+a+motion.x,block_col*block_size+b+motion.y);
-						if ((loc_dist.x <0) or (loc_dist.x > row) or (loc_dist.y <0 ) or (loc_dist.y > col))
+						Point loc_dist(r*block_size+a+motion.x,c*block_size+b+motion.y);
+						if ((loc_dist.x <0) or (loc_dist.x > row-1) or (loc_dist.y <0 ) or (loc_dist.y > col-1))
 						{
-							//printf("%d,%d\n",loc_dist.x,loc_dist.y);
+							//cout << "out of the edge, x is " << loc_dist.x << "and y is " << loc_dist.y << endl;
 							continue;
 						}
 						else
 						{
-							Vec3i src_pix = src_image.at<Vec3b>(block_row*block_size+a,block_col*block_size+b);
-							IF_image.at<Vec3b>(block_row*block_size+a+motion.x,block_col*block_size+b+motion.y) = src_pix;
+							Vec3b src_pix = src_image.at<Vec3b>(r*block_size+a,c*block_size+b);
+							//cout << src_pix << endl;
+							IF_image.at<Vec3b>(r*block_size+a+motion.x,c*block_size+b+motion.y) = src_pix;
+							//cout << IF_image.at<Vec3b>(block_row*block_size+a+motion.x,block_col*block_size+b+motion.y) << endl;
 						}
 
 						//cout << "a:"<< a << ",b:"<< b<< ",("<<bgr.val[0]<<"," <<bgr.val[1]<<"," <<bgr.val[2]<<")" << endl;  
@@ -560,41 +564,49 @@ int main(int argc, char**argv)
 
     int cnt(0), block_size(8);
     VideoCapture cap;
-
+    long VideoTotalFrame;
 
     if (!cap.open(file_name))
 	{
-		printf("%s open is fail\n",file_name);
+		cout << file_name << "open is fail" << endl;
+		exit(1)	;
         return -1;	
 	}
 	else
 	{
-		printf("load image %s \n" ,file_name);
+		cout << "load video " << file_name << endl;
+		VideoTotalFrame = cap.get(CV_CAP_PROP_FRAME_COUNT);
+		cout << "the total frame of the Video is " << VideoTotalFrame << endl;
 	}	
 
     Mat src, dist;
     cap >> src;
+	// *2 --> to save x and y of the motion
     int *motion_map = new int[src.cols/block_size * src.rows/block_size * 2]();
 
     chrono::duration<float, milli> dtn;
     float avg_dtn;
 
-    //VideoWriter record("record.avi", CV_FOURCC('M','J','P','G'), 60., Size(src.cols, src.rows), true);
+    VideoWriter record("record.avi", CV_FOURCC('M','J','P','G'), 60., Size(src.cols, src.rows), true);
 
 	
     while (1)
     {
-        //imwrite(boost::str(boost::format("./video/%04d.jpg") %cnt).c_str(), src);		
-
         chrono::steady_clock::time_point start = chrono::steady_clock::now();
         Mat gsrc, gdist, out, IF_img;
 
         cap >> dist;
+		//empth --> the last frame in the video
+		if (dist.empty())
+		{
+			break;
+		}
         out = dist.clone();
 
         cvtColor(src, gsrc, CV_BGR2GRAY);
         cvtColor(dist, gdist, CV_BGR2GRAY);
 
+		//debug
 		//imwrite(boost::str(boost::format("./video/%04d_a.jpg") %cnt).c_str(), src);	
 		//imwrite(boost::str(boost::format("./video/%04d_b.jpg") %cnt).c_str(), dist);
 		//imshow("src",gsrc);
@@ -603,31 +615,37 @@ int main(int argc, char**argv)
         //tdrs(gsrc, gdist, out, motion_map);
 		IF_img = src.clone();
 		tdrs_MC(gsrc, gdist, out, src, IF_img, motion_map);
+
+		//frame reflash to the next circle
         src = dist.clone();
 
         chrono::steady_clock::time_point end = chrono::steady_clock::now();
         dtn = end - start;
         avg_dtn = (cnt/float(cnt+1))*avg_dtn + (dtn.count()/float(cnt+1));
         cnt++;
-		//printf("cnt is %d ...\n",cnt);
+		//cout << "cnt is " << cnt << endl;
 
         string tmp = boost::str(boost::format("%2.2fms / %2.2fms")% dtn.count()  %avg_dtn );
         putText(out, tmp, cvPoint(30,30), FONT_HERSHEY_COMPLEX_SMALL, 0.8, cvScalar(0,200,0), 1, CV_AA);
+		putText(IF_img, tmp, cvPoint(30,30), FONT_HERSHEY_COMPLEX_SMALL, 0.8, cvScalar(0,200,0), 1, CV_AA);
 
 		//record the video
-		//record.write(IF_img);
-        //record.write(out);
+		record.write(IF_img);
+        record.write(out);
 
 		//save the image of the output
-		imwrite(boost::str(boost::format("./video/%04d_a.jpg") %cnt).c_str(), IF_img);
-		imwrite(boost::str(boost::format("./video/%04d_b.jpg") %cnt).c_str(), out);	
+		//imwrite(boost::str(boost::format("./video/%04d_a.jpg") %cnt).c_str(), IF_img);
+		//imwrite(boost::str(boost::format("./video/%04d_b.jpg") %cnt).c_str(), out);	
 
-        imshow("motion", out);
+        imshow("motion", IF_img);
+		//imshow("motion", out);
 		//waitKey(0);
 
-        if (waitKey(1) == 'q')
+        if (char(waitKey(1)) == 'q')
             break;
     }
     delete [] motion_map;
+
+	cout << "the process has been completed" <<endl;
     return 0;
 }
