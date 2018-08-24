@@ -1,6 +1,5 @@
 #include <opencv2/opencv.hpp>
 
-#include <math.h> 
 #include <iostream>
 #include <string>
 #include <stdio.h>
@@ -19,8 +18,7 @@
 using namespace std;
 using namespace cv;
 
-int BLOCKSIZE = 16;
-int CPU_THREAD = 1;
+int BLOCKSIZE = 2;
 
 float get_max(float *input, int size)
 {
@@ -38,38 +36,16 @@ float get_max(float *input, int size)
 //motion from src to dist
 int get_sad(uchar *src, uchar *dist, int dx, int dy, int sx, int sy, int col)
 {
-
     int block_size(BLOCKSIZE);
-	//left top point of the block
     sx -= block_size/2; sy -= block_size/2;
     dx -= block_size/2; dy -= block_size/2;
-/*
-	//left top point of the block
-    uchar *pCur, *pRef, *tmpCur, *tmpRef;
-    pCur = (dist + dx*col + dy);
-    pRef = (src + sx*col + sy);
 
-	int sum_sad(0);
-	for (int a = 0; a < block_size; a++)
-	{
-		for (int b = 0; b< block_size; b++)
-		{
-			tmpCur = pCur + a*col+b;
-			tmpRef = pRef + a*col+b;
-			sum_sad += fabs(*tmpCur - *tmpRef);
-		}
-	}
-	//cout << ":" << sum_sad << endl;
-	return sum_sad;
-
-*/
     __m128i s0, s1, s2;
     s2 = _mm_setzero_si128();
 
-	//center
     uchar *pCur, *pRef;
-    pCur = (dist + dx*col + dy);
-    pRef = (src + sx*col + sy);
+    pCur = (dist + dy*col + dx);
+    pRef = (src + sy*col + sx);
 
     int sad_test(0);
     for (int row = 0; row < block_size; row++)
@@ -82,11 +58,7 @@ int get_sad(uchar *src, uchar *dist, int dx, int dy, int sx, int sy, int col)
         pCur += col;
         pRef += col;
     }
-
-	//cout << sad_test << endl;
     return sad_test;
-
-
 }
 
 inline float norm(int *point)
@@ -95,7 +67,7 @@ inline float norm(int *point)
 }
 
 
-//point(x,y) means (row, col)
+//point(x,y) means (col, row)
 void oaat(uchar *src, uchar *dist, int *output, int *center, int *block_center, int searching_area, int *updates, int src_rows, int src_cols)
 {
     int block_size(BLOCKSIZE), radius(block_size/2);
@@ -117,7 +89,7 @@ void oaat(uchar *src, uchar *dist, int *output, int *center, int *block_center, 
         for (int i = 0; i < 3; i++) //3 candidate
         {
             //cs[i*2] -> x, cs[i*2+1] -> y
-            if (cs[i*2] < radius or cs[i*2+1] < radius or cs[i*2] > src_rows - radius or cs[i*2+1] > src_cols - radius)
+            if (cs[i*2] < radius or cs[i*2+1] < radius or cs[i*2] > src_cols - radius or cs[i*2+1] > src_rows - radius)
                 continue;
 
             int sad = get_sad(src, dist, *center, *(center+1), cs[i*2], cs[i*2+1], src_cols);
@@ -163,30 +135,19 @@ void oaat(uchar *src, uchar *dist, int *output, int *center, int *block_center, 
 }
 
 
-void tdrs_thread(uchar *dsrc, uchar *ddist, int *plmm, int *pmm, int src_rows, int src_cols, int cur_thread, int num_thread, int direction)
+void tdrs_thread(uchar *dsrc, uchar *ddist, int *plmm, int *pmm, int src_rows, int src_cols, int cur_thread, int num_thread)
 {
     int block_size(BLOCKSIZE);
     int searching_area(block_size*block_size), radius(block_size/2);
     int block_row(src_rows/block_size), block_col(src_cols/block_size);
 
-/*	//debug
-	if (direction == 0)
-	{
-		cout << cur_thread << " thread is working " << " FORWARD" << endl;
-	}
-	else if (direction == 1)
-	{
-		cout << cur_thread << " thread is working " << " BACKWARD" << endl;
-	}
-*/
-
+ 	//cout << "thread num is " << cur_thread << " working" << endl;
 
     for (int r = cur_thread; r < block_row; r += num_thread)
     {
         for (int c = 0; c < block_col; c++)
         {
-			//this bug has been fix!!!!!
-            int center[2] = {r*block_size + radius,  c*block_size + radius};
+            int center[2] = {c*block_size + radius,  r*block_size + radius};
 
             //boundary, use one-at-a-time
             if (r == 0 or c == 0 or c == block_col - 1)
@@ -210,8 +171,8 @@ void tdrs_thread(uchar *dsrc, uchar *ddist, int *plmm, int *pmm, int src_rows, i
             else
             {
                 //magic number from paper
-                int p(8);
-                int updates[16] = {1,-1, -1, 1, 0, 2, 0, -2, 4, 0, -4, 0, 5, 2, -5, -2};
+                int p(9);
+                int updates[18] = {0,0, 1,0, -1,0, 2,0, -2,0 ,0,1, 0,-1, 0,-3, 0,3 };
 
                 //initial estimation is early cauculated value
                 int Da_current[2] = { *(plmm+((r-1)*block_col*2 + (c-1)*2 + 0)), *(plmm + ( (r-1)*block_col*2 + (c-1)*2 + 1))}; //motion_map[r-1][c-1]	//Sa
@@ -222,12 +183,12 @@ void tdrs_thread(uchar *dsrc, uchar *ddist, int *plmm, int *pmm, int src_rows, i
                 int Db_previous[2] = {0,0};
 
                 //if there is CAs
-                if (c > 1 and r < block_row -1 and c < block_row -1)
+                if (c > 2 and r < block_row -2 and c < block_row -2)
                 {
-                    Da_previous[0] =  *(plmm + ((r+1)*block_col*2 + (c+1)*2 + 0)); //last_motion[r+1][c+1]	//Ta
-                    Da_previous[1] =  *(plmm + ((r+1)*block_col*2 + (c+1)*2 + 1));
-                    Db_previous[0] =  *(plmm + ((r+1)*block_col*2 + (c-1)*2 + 0)); //last_motion[r+1][c-1]	//Tb
-                    Db_previous[1] =  *(plmm + ((r+1)*block_col*2 + (c-1)*2 + 1));
+                    Da_previous[0] =  *(plmm + ((r+2)*block_col*2 + (c+2)*2 + 0)); //last_motion[r+2][c+2]	//Ta
+                    Da_previous[1] =  *(plmm + ((r+2)*block_col*2 + (c+2)*2 + 1));
+                    Db_previous[0] =  *(plmm + ((r+2)*block_col*2 + (c-2)*2 + 0)); //last_motion[r+2][c-2]	//Tb
+                    Db_previous[1] =  *(plmm + ((r+2)*block_col*2 + (c-2)*2 + 1));
                 }
 
                 int block_cnt_a(r*c), block_cnt_b(r*c+2);
@@ -243,7 +204,7 @@ void tdrs_thread(uchar *dsrc, uchar *ddist, int *plmm, int *pmm, int src_rows, i
 
                     int update_a[2] = {updates[(block_cnt_a %p)*2], updates[(block_cnt_a %p)*2 + 1]};
                     int update_b[2] = {updates[(block_cnt_b %p)*2], updates[(block_cnt_b %p)*2 + 1]};
-
+					//printf("%d,block_cnt %% p = %d\n",block_cnt_a,(block_cnt_a %p)*2);
                     block_cnt_a++; block_cnt_b++;
 
                     //inital candidate set, 1st : ACS, 2nd : CAs, 3th : 0
@@ -263,9 +224,9 @@ void tdrs_thread(uchar *dsrc, uchar *ddist, int *plmm, int *pmm, int src_rows, i
                         int eval_center_a[2] = {center[0] - cs_a[index*2],  center[1] - cs_a[index*2 + 1]};
                         int eval_center_b[2] = {center[0] - cs_b[index*2],  center[1] - cs_b[index*2 + 1]};
 
-                        if (eval_center_a[0] < radius or eval_center_a[1] < radius or eval_center_a[0] > src_rows - radius or eval_center_a[1] > src_cols - radius)
+                        if (eval_center_a[0] < radius or eval_center_a[1] < radius or eval_center_a[0] > src_cols - radius or eval_center_a[1] > src_rows - radius)
                             out_of_boundary_a = true;
-                        if (eval_center_b[0] < radius or eval_center_b[1] < radius or eval_center_b[0] > src_rows - radius or eval_center_b[1] > src_cols - radius)
+                        if (eval_center_b[0] < radius or eval_center_b[1] < radius or eval_center_b[0] > src_cols - radius or eval_center_b[1] > src_rows - radius)
                             out_of_boundary_b = true;
                         if (out_of_boundary_a and out_of_boundary_b)
                             continue;
@@ -319,7 +280,7 @@ void tdrs_thread(uchar *dsrc, uchar *ddist, int *plmm, int *pmm, int src_rows, i
                         }
 
                         current_sad += penalty;
-                        if (current_sad < min_sad_a)
+                        if (min_sad_a > current_sad)
                         {
                             min_sad_a = current_sad;
                             tmp_update_a[0] = candidate_a[i*2];
@@ -356,7 +317,7 @@ void tdrs_thread(uchar *dsrc, uchar *ddist, int *plmm, int *pmm, int src_rows, i
                                 break;
                         }
                         current_sad += penalty;
-                        if (current_sad < min_sad_b)
+                        if (min_sad_b > current_sad)
                         {
                             min_sad_b = current_sad;
                             tmp_update_b[0] = candidate_b[i*2];
@@ -417,8 +378,6 @@ void tdrs_thread(uchar *dsrc, uchar *ddist, int *plmm, int *pmm, int src_rows, i
                     //break if out of searching area
                     if (abs(Da_current[0]) > searching_area or abs(Da_current[1]) > searching_area or abs(Db_current[0]) > searching_area or abs(Db_current[1]) > searching_area)
                     {
-						//cout << "A: " << Da_current[0] << " ; " << Da_current[1] << endl;
-						//cout << "B: " << Db_current[0] << " ; " << Db_current[1] << endl;
                         break;
                     }
                 }
@@ -441,131 +400,8 @@ void tdrs_thread(uchar *dsrc, uchar *ddist, int *plmm, int *pmm, int src_rows, i
 
 
 
-
-
-
 //imread generate a continous matrix
-void general_IF_MC(Mat &src_image, Mat &IF_image, Mat &dist_image, int *last_motion)
-{
-    int block_size(BLOCKSIZE), radius(block_size/2);
-    int row(src_image.rows), col(src_image.cols);
-    int block_row(row/block_size), block_col(col/block_size);
-
-	//MC
-	uchar* current = IF_image.ptr<uchar>();
-	for (int r = 0; r< block_row; r++)
-	{
-		for (int c = 0; c< block_col;c++)
-		{
-			if (*(last_motion + r*block_col*2 + c*2) != 0 or *(last_motion + r*block_col*2 + c*2 + 1) != 0)	
-			{
-				Point motion(*(last_motion + r*block_col*2 + c*2) , *(last_motion + r*block_col*2 + c*2 + 1));
-				motion.x = int(motion.x*0.5);
-				motion.y = int(motion.y*0.5);
-				//cout << "motion.x/y is " << motion << endl;
-				for (int a = 0; a< block_size; a++)
-				{
-					for (int b = 0; b < block_size; b++)
-					{
-						Point prev_dist(r*block_size+a-motion.x,c*block_size+b-motion.y);
-						Point next_dist(r*block_size+a+motion.x,c*block_size+b+motion.y);
-						if ((prev_dist.x <0) or (prev_dist.x > row-1) or (prev_dist.y <0 ) or (prev_dist.y > col-1))
-						{
-							continue;
-						}
-						else if ((next_dist.x <0) or (next_dist.x > row-1) or (next_dist.y <0 ) or (next_dist.y > col-1))
-						{
-							continue;
-						}
-						else
-						{
-							//
-							Vec3b src_pix_prev = src_image.at<Vec3b>(r*block_size+a-motion.x,c*block_size+b-motion.y);
-							Vec3b src_pix_next = dist_image.at<Vec3b>(r*block_size+a+motion.x,c*block_size+b+motion.y);
-							//cout << src_pix_prev << " ; " << src_pix_next << endl;
-							for (int i = 0;i <3 ;i++)
-							{
-								IF_image.at<Vec3b>(r*block_size+a,c*block_size+b)[i] = int(0.5*(src_pix_prev[i]+src_pix_next[i]));			
-							}
-							
-							//cout << IF_image.at<Vec3b>(r*block_size+a,c*block_size+b) << endl;
-						}
- 
-					}
-				}
-			}	
-		}
-	}
- 
-
-}
-
-
-
-//Select the better SAD
-void select_sad(uchar *src, uchar *dist, int *current_motion_forward, int *current_motion_backward, int *sad_motion_map, int src_row, int src_col)
-{
-    int block_size(BLOCKSIZE), radius(block_size/2);
-    int row(src_row), col(src_col);
-    int block_row(row/block_size), block_col(col/block_size);
-
-
-	for (int r = 0; r< block_row; r++)
-	{
-		for (int c = 0; c< block_col;c++)
-		{
-			int val_forward[2] = {int(fabs(*(current_motion_forward + r*block_col*2 + c*2))),int(fabs(*(current_motion_forward + r*block_col*2 + c*2+1)))};
-			int val_backward[2] = {int(fabs(*(current_motion_backward + r*block_col*2 + c*2))),int(fabs(*(current_motion_backward + r*block_col*2 + c*2+1)))};
-
-			//the vector of the both direction motion is equal
-			if ((val_forward[0] == val_backward[0]) and (val_forward[1] == val_backward[1]))	
-			{
-				*(sad_motion_map + r*block_col*2 + c*2) = val_forward[0];
-				*(sad_motion_map + r*block_col*2 + c*2+1) = val_forward[1];
-			}
-			else
-			{
-				int forward_sad(0), backward(0);
-
-				{
-					//forward SAD
-					int src_center[2] = {r*block_size+radius-int(val_forward[0]*0.5), c*block_size+radius-int(val_forward[1]*0.5)};
-					int dist_center[2] = {r*block_size+radius+int(val_forward[0]*0.5), c*block_size+radius+int(val_forward[1]*0.5)};
-
-					forward_sad = get_sad(src, dist, src_center[0], src_center[1], src_center[0], src_center[1],src_col);
-					//cout << forward_sad <<endl;
-				}
-
-				{
-					//backward SAD
-					int src_center[2] = {r*block_size+radius-int(val_backward[0]*0.5), c*block_size+radius-int(val_backward[1]*0.5)};
-					int dist_center[2] = {r*block_size+radius+int(val_backward[0]*0.5), c*block_size+radius+int(val_backward[1]*0.5)};
-
-					backward = get_sad(dist, src, src_center[0], src_center[1], src_center[0], src_center[1],src_col);
-					//cout << backward <<endl;
-				}
-			
-
-				if(forward_sad <= backward)
-				{
-					*(sad_motion_map + r*block_col*2 + c*2) = val_forward[0];
-					*(sad_motion_map + r*block_col*2 + c*2+1) = val_forward[1];	
-				}
-				else
-				{
-					*(sad_motion_map + r*block_col*2 + c*2) = -val_backward[0];
-					*(sad_motion_map + r*block_col*2 + c*2+1) = -val_backward[1];	
-				}
-			}
-
-			//cout << *(sad_motion_map + r*block_col*2 + c*2) << "	" << *(sad_motion_map + r*block_col*2 + c*2+1) <<endl;	
-		}
-	}
-}
-
-
-//imread generate a continous matrix
-void tdrs_both(Mat &src, Mat &dist, Mat &src_image, Mat &IF_image, int *last_motion_forward, int *last_motion_backward)
+void tdrs(Mat &src, Mat &dist, Mat &draw, int *last_motion)
 {
     int block_size(BLOCKSIZE), radius(block_size/2);
     int row(src.rows), col(src.cols);
@@ -581,75 +417,140 @@ void tdrs_both(Mat &src, Mat &dist, Mat &src_image, Mat &IF_image, int *last_mot
 
     //initial zero motion map
     int size = block_row * block_col * 2;
-    int *motion_map_forward = new int[size]();
-    int *motion_map_backward = new int[size]();
+    int *motion_map = new int[size]();
 
-	//FORWARD:	pmm --> current ;		plmm --> last frame
-    int *pmm_f, *plmm_f;
-    pmm_f = new int[size];
-    memcpy(pmm_f, motion_map_forward, size*sizeof(int));
-    plmm_f = new int[size];
-    memcpy(plmm_f, last_motion_forward, size*sizeof(int));
+    int *pmm, *plmm;
+    pmm = new int[size];
+    memcpy(pmm, motion_map, size*sizeof(int));
+    plmm = new int[size];
+    memcpy(plmm, last_motion, size*sizeof(int));
 
-	//BACKWARD:	pmm --> current ;		plmm --> last frame
-    int *pmm_b, *plmm_b;
-    pmm_b = new int[size];
-    memcpy(pmm_b, motion_map_backward, size*sizeof(int));
-    plmm_b = new int[size];
-    memcpy(plmm_b, last_motion_backward, size*sizeof(int));
-
-	int *pmm_better_sad;
-	pmm_better_sad = new int[size];
-
-    int total_thread = CPU_THREAD;
-    thread ts_f[total_thread];
-	thread ts_b[total_thread];
-
-	int forward_direction = 0;
-	int backward_direction =1;
-	//forward
+    int total_thread = 4;
+    thread ts[total_thread];
     for (int i = 0; i < total_thread; i++)
-	{
-        ts_f[i] = thread(tdrs_thread, dsrc, ddist, plmm_f, pmm_f, src.rows, src.cols, i, total_thread, forward_direction);
-	}
-
-	//backward
+        ts[i] = thread(tdrs_thread, dsrc, ddist, plmm, pmm, src.rows, src.cols, i, total_thread);
     for (int i = 0; i < total_thread; i++)
-	{
-        ts_b[i] = thread(tdrs_thread, ddist, dsrc, plmm_b, pmm_b, src.rows, src.cols, i, total_thread, backward_direction);
-	}
-	
-	//thread.join
-    for (int i = 0; i < total_thread; i++)
-	{
-        ts_f[i].join();
-        ts_b[i].join();
-	}
-
-
-	//select the better SAD
-	select_sad(dsrc, ddist, pmm_f, pmm_b, pmm_better_sad, row, col);
-
-	//update last_motion for next frame
-
-
+        ts[i].join();
 
     //update last_motion for next frame
-    memcpy(last_motion_forward, pmm_better_sad, size*sizeof(int));
-    memcpy(last_motion_backward, pmm_better_sad, size*sizeof(int));
-
-	//IF_forward
-	Mat dist_image = IF_image.clone();
-	general_IF_MC(src_image,IF_image,dist_image,last_motion_forward);
+    memcpy(last_motion, pmm, size*sizeof(int));
 
     //free memory
-    delete [] pmm_f; delete [] plmm_f; 
-    delete [] pmm_b; delete [] plmm_b;
-	delete [] motion_map_forward; delete [] motion_map_backward;
-	delete [] pmm_better_sad;
-	delete [] dsrc; delete [] ddist; 
+    delete [] pmm; delete [] plmm; delete [] dsrc; delete [] ddist; delete [] motion_map;
+
+	//draw the arrowed line
+    for (int r = 0; r < block_row; r++)
+    {
+        for (int c = 0; c < block_col; c++)
+        {
+            if ( *(last_motion + r*block_col*2 + c*2) != 0 or *(last_motion + r*block_col*2 + c*2 + 1) != 0)
+            {
+                Point motion(*(last_motion + r*block_col*2 + c*2) , *(last_motion + r*block_col*2 + c*2 + 1));
+				//printf("%d,%d\n",motion.x,motion.y);
+                Point center(c*block_size + radius, r*block_size + radius);
+				//printf("%d,%d\n",center.x,center.y);
+                Point from = center - motion;
+                arrowedLine(draw, from, center, Scalar(0,255,0));
+            }
+        }
+    }
 	
-	
+} 
+
+
+
+//imread generate a continous matrix
+void tdrs_MC(Mat &src, Mat &dist, Mat &draw, Mat &src_image, Mat &IF_image,int *last_motion)
+{
+    int block_size(BLOCKSIZE), radius(block_size/2);
+    int row(src.rows), col(src.cols);
+    int block_row(row/block_size), block_col(col/block_size);
+    int img_size = row * col;
+
+    uchar *dsrc, *ddist;
+    dsrc = new uchar[img_size];
+    memcpy(dsrc, src.data, img_size*sizeof(uchar));
+    ddist = new uchar[img_size];
+    memcpy(ddist, dist.data, img_size*sizeof(uchar));
+
+
+    //initial zero motion map
+    int size = block_row * block_col * 2;
+    int *motion_map = new int[size]();
+
+    int *pmm, *plmm;
+    pmm = new int[size];
+    memcpy(pmm, motion_map, size*sizeof(int));
+    plmm = new int[size];
+    memcpy(plmm, last_motion, size*sizeof(int));
+
+    int total_thread = 4;
+    thread ts[total_thread];
+    for (int i = 0; i < total_thread; i++)
+        ts[i] = thread(tdrs_thread, dsrc, ddist, plmm, pmm, src.rows, src.cols, i, total_thread);
+    for (int i = 0; i < total_thread; i++)
+        ts[i].join();
+
+    //update last_motion for next frame
+    memcpy(last_motion, pmm, size*sizeof(int));
+
+    //free memory
+    delete [] pmm; delete [] plmm; delete [] dsrc; delete [] ddist; delete [] motion_map;
+
+	//draw the arrowed line
+	/*
+    for (int r = 0; r < block_row; r++)
+    {
+        for (int c = 0; c < block_col; c++)
+        {
+            if ( *(last_motion + r*block_col*2 + c*2) != 0 or *(last_motion + r*block_col*2 + c*2 + 1) != 0)
+            {
+                Point motion(*(last_motion + r*block_col*2 + c*2) , *(last_motion + r*block_col*2 + c*2 + 1));
+				//printf("%d,%d\n",motion.x,motion.y);
+                Point center(c*block_size + radius, r*block_size + radius);
+				//printf("%d,%d\n",center.x,center.y);
+                Point from = center - motion;
+                arrowedLine(draw, from, center, Scalar(0,255,0));
+            }
+        }
+    }
+	*/
+
+	//MC
+	for (int r = 0; r< block_row; r++)
+	{
+		for (int c = 0; c< block_col;c++)
+		{
+			if (*(last_motion + r*block_col*2 + c*2) != 0 or *(last_motion + r*block_col*2 + c*2 + 1) != 0)	
+			{
+				Point motion(*(last_motion + r*block_col*2 + c*2) , *(last_motion + r*block_col*2 + c*2 + 1));
+				motion.x = int(motion.x*0.5);
+				motion.y = int(motion.y*0.5);
+				//cout << "motion.x/y is " << motion << endl;
+				for (int a = 0; a< block_size; a++)
+				{
+					for (int b = 0; b < block_size; b++)
+					{
+						Point loc_dist(r*block_size+a+motion.x,c*block_size+b+motion.y);
+						if ((loc_dist.x <0) or (loc_dist.x > row-1) or (loc_dist.y <0 ) or (loc_dist.y > col-1))
+						{
+							//cout << "out of the edge, x is " << loc_dist.x << "and y is " << loc_dist.y << endl;
+							continue;
+						}
+						else
+						{
+							Vec3b src_pix = src_image.at<Vec3b>(r*block_size+a,c*block_size+b);
+							//cout << src_pix << endl;
+							IF_image.at<Vec3b>(r*block_size+a+motion.x,c*block_size+b+motion.y) = src_pix;
+							//cout << IF_image.at<Vec3b>(block_row*block_size+a+motion.x,block_col*block_size+b+motion.y) << endl;
+						}
+ 
+					}
+				}
+			}	
+		}
+	}
+
 } 
 
 
@@ -681,13 +582,12 @@ int main(int argc, char**argv)
     Mat src, dist;
     cap >> src;
 	// *2 --> to save x and y of the motion
-    int *motion_map_forward = new int[src.cols/block_size * src.rows/block_size * 2]();
-    int *motion_map_backward = new int[src.cols/block_size * src.rows/block_size * 2]();
+    int *motion_map = new int[src.cols/block_size * src.rows/block_size * 2]();
 
     chrono::duration<float, milli> dtn;
     float avg_dtn;
 
-    //VideoWriter record("record.avi", CV_FOURCC('M','J','P','G'), 60., Size(src.cols, src.rows), true);
+    VideoWriter record("record.avi", CV_FOURCC('M','J','P','G'), 60., Size(src.cols, src.rows), true);
 
 	
     while (1)
@@ -713,10 +613,8 @@ int main(int argc, char**argv)
 		//imshow("dist",gdist);
 
         //tdrs(gsrc, gdist, out, motion_map);
-		IF_img = dist.clone();
-		
-		//bothward: FORWARD and BACKWARD
-		tdrs_both(gsrc, gdist, src, IF_img, motion_map_forward, motion_map_backward);
+		IF_img = src.clone();
+		tdrs_MC(gsrc, gdist, out, src, IF_img, motion_map);
 
 		//frame reflash to the next circle
         src = dist.clone();
@@ -732,8 +630,8 @@ int main(int argc, char**argv)
 		putText(IF_img, tmp, cvPoint(30,30), FONT_HERSHEY_COMPLEX_SMALL, 0.8, cvScalar(0,200,0), 1, CV_AA);
 
 		//record the video
-		//record.write(IF_img);
-        //record.write(out);
+		record.write(IF_img);
+        record.write(out);
 
 		//save the image of the output
 		//imwrite(boost::str(boost::format("./video/%04d_a.jpg") %cnt).c_str(), IF_img);
@@ -746,8 +644,7 @@ int main(int argc, char**argv)
         if (char(waitKey(1)) == 'q')
             break;
     }
-    delete [] motion_map_forward;
-	delete [] motion_map_backward;
+    delete [] motion_map;
 
 	cout << "the process has been completed" <<endl;
     return 0;
