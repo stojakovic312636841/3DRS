@@ -18,7 +18,7 @@
 using namespace std;
 using namespace cv;
 
-int BLOCKSIZE = 2;
+int BLOCKSIZE = 8;
 
 float get_max(float *input, int size)
 {
@@ -498,7 +498,7 @@ void tdrs_MC(Mat &src, Mat &dist, Mat &draw, Mat &src_image, Mat &IF_image,int *
     delete [] pmm; delete [] plmm; delete [] dsrc; delete [] ddist; delete [] motion_map;
 
 	//draw the arrowed line
-	/*
+/*
     for (int r = 0; r < block_row; r++)
     {
         for (int c = 0; c < block_col; c++)
@@ -514,8 +514,8 @@ void tdrs_MC(Mat &src, Mat &dist, Mat &draw, Mat &src_image, Mat &IF_image,int *
             }
         }
     }
-	*/
-
+*/	
+	
 	//MC
 	for (int r = 0; r< block_row; r++)
 	{
@@ -523,7 +523,8 @@ void tdrs_MC(Mat &src, Mat &dist, Mat &draw, Mat &src_image, Mat &IF_image,int *
 		{
 			if (*(last_motion + r*block_col*2 + c*2) != 0 or *(last_motion + r*block_col*2 + c*2 + 1) != 0)	
 			{
-				Point motion(*(last_motion + r*block_col*2 + c*2) , *(last_motion + r*block_col*2 + c*2 + 1));
+				//fix this bug!!!! last_motion --> (y,x)
+				Point motion(*(last_motion + r*block_col*2 + c*2+1) , *(last_motion + r*block_col*2 + c*2));
 				motion.x = int(motion.x*0.5);
 				motion.y = int(motion.y*0.5);
 				//cout << "motion.x/y is " << motion << endl;
@@ -550,7 +551,7 @@ void tdrs_MC(Mat &src, Mat &dist, Mat &draw, Mat &src_image, Mat &IF_image,int *
 			}	
 		}
 	}
-
+	
 } 
 
 
@@ -587,7 +588,7 @@ int main(int argc, char**argv)
     chrono::duration<float, milli> dtn;
     float avg_dtn;
 
-    VideoWriter record("record.avi", CV_FOURCC('M','J','P','G'), 60., Size(src.cols, src.rows), true);
+    //VideoWriter record("record.avi", CV_FOURCC('M','J','P','G'), 60., Size(src.cols, src.rows), true);
 
 	
     while (1)
@@ -630,8 +631,8 @@ int main(int argc, char**argv)
 		putText(IF_img, tmp, cvPoint(30,30), FONT_HERSHEY_COMPLEX_SMALL, 0.8, cvScalar(0,200,0), 1, CV_AA);
 
 		//record the video
-		record.write(IF_img);
-        record.write(out);
+		//record.write(IF_img);
+        //record.write(out);
 
 		//save the image of the output
 		//imwrite(boost::str(boost::format("./video/%04d_a.jpg") %cnt).c_str(), IF_img);
