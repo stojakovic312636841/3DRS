@@ -19,11 +19,8 @@
 using namespace std;
 using namespace cv;
 
-int BLOCKSIZE = 4;
-int CPU_THREAD = 1;
-int DISTANCE_THEROSHOLD = 80;
-int MV_THRESHOLD = 20;
-int ERROR_VALUE = 2048;
+int BLOCKSIZE = 8;
+int DISTANCE_THEROSHOLD = 40;
 
 float get_max(float *input, int size)
 {
@@ -45,26 +42,6 @@ int get_sad(uchar *src, uchar *dist, int dx, int dy, int sx, int sy, int col)
     int block_size(BLOCKSIZE);
     sx -= block_size/2; sy -= block_size/2;
     dx -= block_size/2; dy -= block_size/2;
-/*
-	//left top point of the block
-    uchar *pCur, *pRef, *tmpCur, *tmpRef;
-    pCur = (dist + dx*col + dy);
-    pRef = (src + sx*col + sy);
-
-	int sum_sad(0);
-	for (int a = 0; a < block_size; a++)
-	{
-		for (int b = 0; b< block_size; b++)
-		{
-			tmpCur = pCur + a*col+b;
-			tmpRef = pRef + a*col+b;
-			sum_sad += fabs(*tmpCur - *tmpRef);
-		}
-	}
-	//cout << ":" << sum_sad << endl;
-	return sum_sad;
-*/
-
 
     __m128i s0, s1, s2;
     s2 = _mm_setzero_si128();
@@ -85,7 +62,6 @@ int get_sad(uchar *src, uchar *dist, int dx, int dy, int sx, int sy, int col)
         pRef += col;
     }
     return sad_test;
-
 }
 
 inline float norm(int *point)
@@ -290,7 +266,7 @@ void MV_without_abnormal(int *pmm, int src_rows, int src_cols)
 					*(pmm + (r*block_col*2 + c*2 + 1)) = array_map[0][1];
 					*(pmm + (r*block_col*2 + c*2 + 0)) = array_map[0][2];
 				}
-				//cout << distance <<endl;
+				cout << distance <<endl;
 
 				delete [] array_map;
 
@@ -339,7 +315,7 @@ void MV_without_abnormal(int *pmm, int src_rows, int src_cols)
 					*(pmm + (r*block_col*2 + c*2 + 1)) = array_map[0][1];
 					*(pmm + (r*block_col*2 + c*2 + 0)) = array_map[0][2];
 				}
-				//cout << distance <<endl;
+				cout << distance <<endl;
 
 				delete [] array_map;
 
@@ -347,8 +323,6 @@ void MV_without_abnormal(int *pmm, int src_rows, int src_cols)
 		}
 	}
 }
-
-
 
 
 
@@ -388,8 +362,8 @@ void tdrs_thread(uchar *dsrc, uchar *ddist, int *plmm, int *pmm, int src_rows, i
             else
             {
                 //magic number from paper
-                int p(8);
-                int updates[16] = {0,4, 0,-4, 2,0, -2,0, -1,1 ,1,-1, 2,5, -2,-5};
+                int p(9);
+                int updates[18] = {0,0, 1,0, -1,0, 2,0, -2,0 ,0,1, 0,-1, 0,-3, 0,3 };
 
                 //initial estimation is early cauculated value
 				//fix big bug!!!
@@ -401,12 +375,12 @@ void tdrs_thread(uchar *dsrc, uchar *ddist, int *plmm, int *pmm, int src_rows, i
                 int Db_previous[2] = {0,0};
 
                 //if there is CAs
-                if (c > 1 and r < block_row -1 and c < block_row -1)
+                if (c > 2 and r < block_row -2 and c < block_row -2)
                 {
-                    Da_previous[0] =  *(plmm + ((r+1)*block_col*2 + (c+1)*2 + 0)); //last_motion[r+2][c+2]	//Ta
-                    Da_previous[1] =  *(plmm + ((r+1)*block_col*2 + (c+1)*2 + 1));
-                    Db_previous[0] =  *(plmm + ((r+1)*block_col*2 + (c-1)*2 + 0)); //last_motion[r+2][c-2]	//Tb
-                    Db_previous[1] =  *(plmm + ((r+1)*block_col*2 + (c-1)*2 + 1));
+                    Da_previous[0] =  *(plmm + ((r+2)*block_col*2 + (c+2)*2 + 0)); //last_motion[r+2][c+2]	//Ta
+                    Da_previous[1] =  *(plmm + ((r+2)*block_col*2 + (c+2)*2 + 1));
+                    Db_previous[0] =  *(plmm + ((r+2)*block_col*2 + (c-2)*2 + 0)); //last_motion[r+2][c-2]	//Tb
+                    Db_previous[1] =  *(plmm + ((r+2)*block_col*2 + (c-2)*2 + 1));
                 }
 
                 int block_cnt_a(r*c), block_cnt_b(r*c+2);
@@ -414,105 +388,39 @@ void tdrs_thread(uchar *dsrc, uchar *ddist, int *plmm, int *pmm, int src_rows, i
                 float SAD_a(100000.), SAD_b(100000.);
                 int not_update_a(0), not_update_b(0);
 
-/*
-				int candidate[26] = {0};
-				float candidate_sad[13] = {0};
-				bool candidate_index[13] = {0};
-
-				//inital 13 candidate set
-                int cs[26] = {Da_current[0], Da_current[1],
-								Db_current[0], Db_current[1],
-                                Da_current[0] + updates[0],  Da_current[1] + updates[1],
-                                Da_current[0] + updates[2],  Da_current[1] + updates[3],
-                                Da_current[0] + updates[4],  Da_current[1] + updates[5],
-                                Da_current[0] + updates[6],  Da_current[1] + updates[7],
-                                Da_current[0] + updates[8],  Da_current[1] + updates[9],
-                                Da_current[0] + updates[10], Da_current[1] + updates[11],
-                                Da_current[0] + updates[12], Da_current[1] + updates[13],
-                                Da_current[0] + updates[14], Da_current[1] + updates[15],
-                                Da_previous[0], Da_previous[1],
-								Db_previous[0], Db_previous[1],
-                                0,0};
-
-				//get SAD from each candidate, there are 13 candidate each time
-                for (int index = 0; index < 13; index++)
-                {
-                    bool out_of_boundary(false);
-                    int eval_center[2] = {center[0] - cs[index*2],  center[1] - cs[index*2 + 1]}; //???? - or +
-
-                    if (eval_center[0] < radius or eval_center[1] < radius or eval_center[0] >= src_cols - radius or eval_center[1] >= src_rows - radius)
-                        out_of_boundary = true;
-                    if (out_of_boundary)
-                        continue;
-
-                    if (not out_of_boundary)
-                    {
-                        candidate[index*2] = cs[index*2];
-                        candidate[index*2 + 1] = cs[index*2 + 1];
-                        candidate_sad[index] = get_sad(dsrc, ddist, center[0], center[1], eval_center[0], eval_center[1] , src_cols);
-                        candidate_index[index] = 1;
-                    }
-
-                }
-
-				//motion vector(0,0) been penalty
-				if(candidate_sad[12] <= 45)
-				{
-					candidate_sad[12] = candidate_sad[12] * 0.9;
-				}else
-				{
-					candidate_sad[12] = candidate_sad[12] * 1.1;
-				}
-
-				//get the min SAD
-				float min_sad(100000.);
-				int tmp_update[2] = {0};
-				for (int i = 0; i < 13; i++)
-				{
-		            if (!candidate_index[i])
-		                continue;
-
-                    if (candidate_sad[i] <= min_sad )
-                    {
-                        min_sad = candidate_sad[i];
-                        tmp_update[0] = candidate[i*2];
-                        tmp_update[1] = candidate[i*2+1];
-                    }	
-					
-				}
-				//cout << tmp_update[0] << " " << tmp_update[1]<< endl;
-				//cout << endl;
-
-				//assert value
-		        *(pmm + (r*block_col*2 + c*2)) = tmp_update[0];
-		        *(pmm + (r*block_col*2 + c*2 + 1)) = tmp_update[1]; 
-*/				
-
                 while (true)
                 {
-                    int candidate_a[10] = {0};        
-                    float candidate_sad_a[5] = {0}; 
-                    bool candidate_index_a[5] = {0};
+                    int candidate_a[8] = {0};        int candidate_b[8] = {0};
+                    float candidate_sad_a[4] = {0};  float candidate_sad_b[4] = {0};
+                    bool candidate_index_a[4] = {0};  bool candidate_index_b[4] = {0};
 
                     int update_a[2] = {updates[(block_cnt_a %p)*2], updates[(block_cnt_a %p)*2 + 1]};
-                    block_cnt_a++;
+                    int update_b[2] = {updates[(block_cnt_b %p)*2], updates[(block_cnt_b %p)*2 + 1]};
+					//printf("%d,block_cnt %% p = %d\n",block_cnt_a,(block_cnt_a %p)*2);
+                    block_cnt_a++; block_cnt_b++;
 
                     //inital candidate set, 1st : ACS, 2nd : CAs, 3th : 0
-                    int cs_a[10] = {Da_current[0], Da_current[1],
-								   Db_current[0], Db_current[1],
+                    int cs_a[8] = {Da_current[0], Da_current[1],
                                    Da_current[0] + update_a[0], Da_current[1] + update_a[1],
                                    Da_previous[0], Da_previous[1],
                                    0,0};
+                    int cs_b[8] = {Db_current[0], Db_current[1],
+                                   Db_current[0] + update_b[0], Db_current[1] + update_b[1],
+                                   Db_previous[0], Db_previous[1],
+                                   0,0};
 
                     //get SAD from each candidate, there are 4 candidate each time
-                    for (int index = 0; index < 5; index++)
+                    for (int index = 0; index < 4; index++)
                     {
                         bool out_of_boundary_a(false), out_of_boundary_b(false);
                         int eval_center_a[2] = {center[0] - cs_a[index*2],  center[1] - cs_a[index*2 + 1]};
+                        int eval_center_b[2] = {center[0] - cs_b[index*2],  center[1] - cs_b[index*2 + 1]};
 
                         if (eval_center_a[0] < radius or eval_center_a[1] < radius or eval_center_a[0] > src_cols - radius or eval_center_a[1] > src_rows - radius)
                             out_of_boundary_a = true;
-                        if (out_of_boundary_a)
+                        if (eval_center_b[0] < radius or eval_center_b[1] < radius or eval_center_b[0] > src_cols - radius or eval_center_b[1] > src_rows - radius)
+                            out_of_boundary_b = true;
+                        if (out_of_boundary_a and out_of_boundary_b)
                             continue;
 
                         if (not out_of_boundary_a)
@@ -523,16 +431,25 @@ void tdrs_thread(uchar *dsrc, uchar *ddist, int *plmm, int *pmm, int src_rows, i
                             candidate_index_a[index] = 1;
                         }
 
+                        if (not out_of_boundary_b)
+                        {
+                            candidate_b[index*2] = cs_b[index*2];
+                            candidate_b[index*2 + 1] = cs_b[index*2 + 1];
+                            candidate_sad_b[index] = get_sad(dsrc, ddist, center[0], center[1], eval_center_b[0], eval_center_b[1] , src_cols);
+                            candidate_index_b[index] = 1;
+                        }
                     }
 
                     //compute penalty from each candidate
-                    float min_sad_a(100000.);
+                    float min_sad_a(100000.), min_sad_b(100000.);
                     int tmp_update_a[2] = {0};
+                    int tmp_update_b[2] = {0};
 
-                    float max_sad_a = get_max(candidate_sad_a, 5);
+                    float max_sad_a = get_max(candidate_sad_a, 4);
+                    float max_sad_b = get_max(candidate_sad_b, 4);
 
                     //compute estimator a
-                    for (int i = 0; i < 5; i++)
+                    for (int i = 0; i < 4; i++)
                     {
                         if (!candidate_index_a[i])
                             continue;
@@ -544,21 +461,18 @@ void tdrs_thread(uchar *dsrc, uchar *ddist, int *plmm, int *pmm, int src_rows, i
                                 penalty = 0.;
                                 break;
                             case 1:
-                                penalty = 0.;
-                                break;
-                            case 2:
                                 penalty = 0.004 * max_sad_a * norm(update_a);
                                 break;
-                            case 3:
+                            case 2:
                                 penalty = 0.008 * max_sad_a;
                                 break;
-                            case 4:
+                            case 3:
                                 penalty = 0.016 * max_sad_a;
                                 break;
                         }
 
                         current_sad += penalty;
-                        if (current_sad < min_sad_a)
+                        if (min_sad_a > current_sad)
                         {
                             min_sad_a = current_sad;
                             tmp_update_a[0] = candidate_a[i*2];
@@ -569,6 +483,43 @@ void tdrs_thread(uchar *dsrc, uchar *ddist, int *plmm, int *pmm, int src_rows, i
                         {
                             tmp_update_a[0] = 0;
                             tmp_update_a[1] = 0;
+                        }
+                    }
+
+                    //compute estimator b
+                    for (int i = 0; i < 4; i++)
+                    {
+                        if (!candidate_index_b[i])
+                            continue;
+                        float current_sad = candidate_sad_b[i];
+                        float penalty(0);
+                        switch (i)
+                        {
+                            case 0:
+                                penalty = 0.;
+                                break;
+                            case 1:
+                                penalty = 0.004 * max_sad_b * norm(update_b);
+                                break;
+                            case 2:
+                                penalty = 0.008 * max_sad_b;
+                                break;
+                            case 3:
+                                penalty = 0.016 * max_sad_b;
+                                break;
+                        }
+                        current_sad += penalty;
+                        if (min_sad_b > current_sad)
+                        {
+                            min_sad_b = current_sad;
+                            tmp_update_b[0] = candidate_b[i*2];
+                            tmp_update_b[1] = candidate_b[i*2+1];
+                        }
+                        //prefer 0 in the case of same SAD
+                        else if (min_sad_b + 40.  > current_sad and candidate_b[i*2] == 0 and candidate_b[i*2+1] == 0)
+                        {
+                            tmp_update_b[0] = 0;
+                            tmp_update_b[1] = 0;
                         }
                     }
 
@@ -583,26 +534,56 @@ void tdrs_thread(uchar *dsrc, uchar *ddist, int *plmm, int *pmm, int src_rows, i
                     else
                         not_update_a += 1;
 
+                    if (min_sad_b < SAD_b)
+                    {
+                        SAD_b = min_sad_b;
+                        Db_current[0] = tmp_update_b[0];
+                        Db_current[1] = tmp_update_b[1];
+                        not_update_b = 0;
+                    }
+                    else
+                        not_update_b += 1;
+
+                    //from paper p373, imporve 2nd withdraw
+                    float threshold = 5;
+                    if (SAD_a > SAD_b + threshold)
+                    {
+                        SAD_a = SAD_b;
+                        Da_current[0] = Db_current[0];
+                        Da_current[1] = Db_current[1];
+                        not_update_a = 0;
+                    }
+                    if (SAD_b > SAD_a + threshold)
+                    {
+                        SAD_b = SAD_a;
+                        Db_current[0] = Da_current[0];
+                        Db_current[1] = Da_current[1];
+                        not_update_b = 0;
+                    }
+
                     //break if any estiminator converge
-                    int check_converge = 8;
-                    if (not_update_a > check_converge)
+                    int check_converge = 2;
+                    if (not_update_a > check_converge or not_update_b > check_converge)
                     {
                         break;
                     }
                     //break if out of searching area
-                    if (abs(Da_current[0]) > searching_area or abs(Da_current[1]) > searching_area )
+                    if (abs(Da_current[0]) > searching_area or abs(Da_current[1]) > searching_area or abs(Db_current[0]) > searching_area or abs(Db_current[1]) > searching_area)
                     {
                         break;
                     }
                 }
 
- 
-                *(pmm + (r*block_col*2 + c*2)) = Da_current[0];
-                *(pmm + (r*block_col*2 + c*2 + 1)) = Da_current[1]; //motion_map[r][c] = Da_current
-
- 
-
-
+                if (SAD_a <= SAD_b)
+                {
+                    *(pmm + (r*block_col*2 + c*2)) = Da_current[0];
+                    *(pmm + (r*block_col*2 + c*2 + 1)) = Da_current[1]; //motion_map[r][c] = Da_current
+                }
+                else
+                {
+                    *(pmm + (r*block_col*2 + c*2)) = Db_current[0];
+                    *(pmm + (r*block_col*2 + c*2 + 1)) = Db_current[1]; //motion_map[r][c] = Db_current
+                }
             }
 
         }
@@ -612,7 +593,6 @@ void tdrs_thread(uchar *dsrc, uchar *ddist, int *plmm, int *pmm, int src_rows, i
 
 
 //imread generate a continous matrix
-/*
 void tdrs(Mat &src, Mat &dist, Mat &draw, int *last_motion)
 {
     int block_size(BLOCKSIZE), radius(block_size/2);
@@ -669,12 +649,11 @@ void tdrs(Mat &src, Mat &dist, Mat &draw, int *last_motion)
 	
 } 
 
-*/
+
 
 //imread generate a continous matrix
 void tdrs_MC(Mat &src, Mat &dist, Mat &draw, Mat &src_image, Mat &IF_image,int *last_motion)
 {
-/*
     int block_size(BLOCKSIZE), radius(block_size/2);
     int row(src.rows), col(src.cols);
     int block_row(row/block_size), block_col(col/block_size);
@@ -714,7 +693,7 @@ void tdrs_MC(Mat &src, Mat &dist, Mat &draw, Mat &src_image, Mat &IF_image,int *
     delete [] pmm; delete [] plmm; delete [] dsrc; delete [] ddist; delete [] motion_map;
 
 	//draw the arrowed line
-
+/*
     for (int r = 0; r < block_row; r++)
     {
         for (int c = 0; c < block_col; c++)
@@ -730,8 +709,8 @@ void tdrs_MC(Mat &src, Mat &dist, Mat &draw, Mat &src_image, Mat &IF_image,int *
             }
         }
     }
-	
-	
+*/	
+/*	
 	//Forward MC
 	for (int r = 0; r< block_row; r++)
 	{
@@ -767,8 +746,8 @@ void tdrs_MC(Mat &src, Mat &dist, Mat &draw, Mat &src_image, Mat &IF_image,int *
 			}	
 		}
 	}
+*/	
 	
-
 	Mat next_img = IF_image.clone();
 	//Both ward
 	for (int r = 0; r< block_row; r++)
@@ -810,226 +789,7 @@ void tdrs_MC(Mat &src, Mat &dist, Mat &draw, Mat &src_image, Mat &IF_image,int *
 			}	
 		}
 	}
-*/
-} 
 
-
-//imread generate a continous matrix
-void general_IF_MC(Mat &src_image, Mat &IF_image, Mat &dist_image, int *last_motion)
-{
-    int block_size(BLOCKSIZE), radius(block_size/2);
-    int row(src_image.rows), col(src_image.cols);
-    int block_row(row/block_size), block_col(col/block_size);
-
-	//Both ward
-	for (int r = 0; r< block_row; r++)
-	{
-		for (int c = 0; c< block_col;c++)
-		{
-			if (*(last_motion + r*block_col*2 + c*2) != 0 or *(last_motion + r*block_col*2 + c*2 + 1) != 0)	
-			{
-				//fix this bug!!!! last_motion --> (y,x)
-				Point motion(*(last_motion + r*block_col*2 + c*2+1) , *(last_motion + r*block_col*2 + c*2));
-				motion.x = int(motion.x*0.5);
-				motion.y = int(motion.y*0.5);
-				//cout << "motion.x/y is " << motion << endl;
-				for (int a = 0; a< block_size; a++)
-				{
-					for (int b = 0; b < block_size; b++)
-					{
-						Point loc_dist_prev(r*block_size+a-motion.x,c*block_size+b-motion.y);
-						Point loc_dist_next(r*block_size+a+motion.x,c*block_size+b+motion.y);
-						if ((loc_dist_prev.x <0) or (loc_dist_prev.x > row-1) or (loc_dist_prev.y <0 ) or (loc_dist_prev.y > col-1) or (loc_dist_next.x <0) or (loc_dist_next.x > row-1) or (loc_dist_next.y <0 ) or (loc_dist_next.y > col-1))
-						{
-							//cout << loc_dist_prev.x << " " << loc_dist_prev.y << " ; " << loc_dist_next.x << " " << loc_dist_next.y << " ; " << endl;
-							continue;
-						}
-						else
-						{
-							if((*(last_motion + r*block_col*2 + c*2) != ERROR_VALUE) and (*(last_motion + r*block_col*2 + c*2+1) != ERROR_VALUE))
-							{
-								Vec3b src_pix = src_image.at<Vec3b>(r*block_size+a-motion.x,c*block_size+b-motion.y);
-								Vec3b dist_pix = dist_image.at<Vec3b>(r*block_size+a+motion.x,c*block_size+b+motion.y);
-								for (int i = 0;i <3 ;i++)
-								{
-									IF_image.at<Vec3b>(r*block_size+a,c*block_size+b)[i] = int(0.5*(src_pix[i]+dist_pix[i]));			
-								}
-								//cout << src_pix << endl;
-								//cout << IF_image.at<Vec3b>(block_row*block_size+a+motion.x,block_col*block_size+b+motion.y) << endl;
-							}
-							else
-							{
-								Vec3b src_pix = src_image.at<Vec3b>(r*block_size+a,c*block_size+b);
-								Vec3b dist_pix = dist_image.at<Vec3b>(r*block_size+a,c*block_size+b);
-								for (int i = 0;i <3 ;i++)
-								{
-									IF_image.at<Vec3b>(r*block_size+a,c*block_size+b)[i] = int(0.5*(src_pix[i]+dist_pix[i]));			
-								}
-							}
-
-						}
- 
-					}
-				}
-			}	
-		}
-	}
- 
-
-}
-
-
-
-//Select the better SAD
-void select_sad(uchar *src, uchar *dist, int *current_motion_forward, int *current_motion_backward, int *sad_motion_map, int src_row, int src_col)
-{
-    int block_size(BLOCKSIZE), radius(block_size/2);
-    int row(src_row), col(src_col);
-    int block_row(row/block_size), block_col(col/block_size);
-
-
-	for (int r = 0; r< block_row; r++)
-	{
-		for (int c = 0; c< block_col;c++)
-		{
-			int val_forward[2] = {int(*(current_motion_forward + r*block_col*2 + c*2+1)),int(*(current_motion_forward + r*block_col*2 + c*2))};
-			int val_backward[2] = {int(*(current_motion_backward + r*block_col*2 + c*2+1)),int(*(current_motion_backward + r*block_col*2 + c*2))};
-
-			//the vector of the both direction motion is equal
-			if ((fabs(val_forward[0]) == fabs(val_backward[0])) and (fabs(val_forward[1]) == fabs(val_backward[1])))	
-			{
-				*(sad_motion_map + r*block_col*2 + c*2+1) = val_forward[0];
-				*(sad_motion_map + r*block_col*2 + c*2) = val_forward[1];
-			}
-			else
-			{
-				int forward_sad(0), backward(0);
-
-				{
-					//forward SAD
-					int src_center[2] = {r*block_size+radius-int(val_forward[0]*0.5), c*block_size+radius-int(val_forward[1]*0.5)};
-					int dist_center[2] = {r*block_size+radius+int(val_forward[0]*0.5), c*block_size+radius+int(val_forward[1]*0.5)};
-
-					forward_sad = get_sad(src, dist, src_center[0], src_center[1], dist_center[0], dist_center[1],src_col);
-					//cout << forward_sad <<endl;
-				}
-
-				{
-					//backward SAD
-					int src_center[2] = {r*block_size+radius-int(val_backward[0]*0.5), c*block_size+radius-int(val_backward[1]*0.5)};
-					int dist_center[2] = {r*block_size+radius+int(val_backward[0]*0.5), c*block_size+radius+int(val_backward[1]*0.5)};
-
-					backward = get_sad(dist, src, src_center[0], src_center[1], dist_center[0], dist_center[1],src_col);
-					//cout << backward <<endl;
-				}
-			
-
-				if((forward_sad <= backward) and (forward_sad < MV_THRESHOLD))
-				{
-					*(sad_motion_map + r*block_col*2 + c*2+1) = val_forward[0];
-					*(sad_motion_map + r*block_col*2 + c*2) = val_forward[1];	
-				}
-				else if((backward <= forward_sad) and (backward < MV_THRESHOLD))
-				{
-					*(sad_motion_map + r*block_col*2 + c*2+1) = -val_backward[0];
-					*(sad_motion_map + r*block_col*2 + c*2) = -val_backward[1];	
-				}
-				else
-				{
-					//cout << "F: " << forward_sad << "; B: " << backward << endl;
-					*(sad_motion_map + r*block_col*2 + c*2+1) = ERROR_VALUE;
-					*(sad_motion_map + r*block_col*2 + c*2) = ERROR_VALUE;	
-				}
-			}
-
-			//cout << *(sad_motion_map + r*block_col*2 + c*2) << "	" << *(sad_motion_map + r*block_col*2 + c*2+1) <<endl;	
-		}
-	}
-}
-
-
-//imread generate a continous matrix
-void tdrs_both(Mat &src, Mat &dist, Mat &src_image, Mat &IF_image, int *last_motion_forward, int *last_motion_backward)
-{
-    int block_size(BLOCKSIZE), radius(block_size/2);
-    int row(src.rows), col(src.cols);
-    int block_row(row/block_size), block_col(col/block_size);
-
-    int img_size = row * col;
-    uchar *dsrc, *ddist;
-    dsrc = new uchar[img_size];
-    memcpy(dsrc, src.data, img_size*sizeof(uchar));
-    ddist = new uchar[img_size];
-    memcpy(ddist, dist.data, img_size*sizeof(uchar));
-
-    //initial zero motion map
-    int size = block_row * block_col * 2;
-    int *motion_map_forward = new int[size]();
-    int *motion_map_backward = new int[size]();
-
-	//FORWARD:	pmm --> current ;		plmm --> last frame
-    int *pmm_f, *plmm_f;
-    pmm_f = new int[size];
-    memcpy(pmm_f, motion_map_forward, size*sizeof(int));
-    plmm_f = new int[size];
-    memcpy(plmm_f, last_motion_forward, size*sizeof(int));
-
-	//BACKWARD:	pmm --> current ;		plmm --> last frame
-    int *pmm_b, *plmm_b;
-    pmm_b = new int[size];
-    memcpy(pmm_b, motion_map_backward, size*sizeof(int));
-    plmm_b = new int[size];
-    memcpy(plmm_b, last_motion_backward, size*sizeof(int));
-
-	int *pmm_better_sad;
-	pmm_better_sad = new int[size];
-
-    int total_thread = CPU_THREAD;
-    thread ts_f[total_thread];
-	thread ts_b[total_thread];
-
-	//forward
-    for (int i = 0; i < total_thread; i++)
-	{
-        ts_f[i] = thread(tdrs_thread, dsrc, ddist, plmm_f, pmm_f, src.rows, src.cols, i, total_thread);
-	}
-
-	//backward
-    for (int i = 0; i < total_thread; i++)
-	{
-        ts_b[i] = thread(tdrs_thread, ddist, dsrc, plmm_b, pmm_b, src.rows, src.cols, i, total_thread);
-	}
-	
-	//thread.join
-    for (int i = 0; i < total_thread; i++)
-	{
-        ts_f[i].join();
-        ts_b[i].join();
-	}
-
-
-	//select the better SAD
-	select_sad(dsrc, ddist, pmm_f, pmm_b, pmm_better_sad, row, col);
-	
-	//mv mean
-	//MV_without_abnormal(pmm_better_sad,row,col);
-
-    //update last_motion for next frame
-    memcpy(last_motion_forward, pmm_better_sad, size*sizeof(int));
-    memcpy(last_motion_backward, pmm_better_sad, size*sizeof(int));
-
-	//IF_bothward
-	Mat dist_image = IF_image.clone();
-	general_IF_MC(src_image,IF_image,dist_image,last_motion_forward);
-
-    //free memory
-    delete [] pmm_f; delete [] plmm_f; 
-    delete [] pmm_b; delete [] plmm_b;
-	delete [] motion_map_forward; delete [] motion_map_backward;
-	delete [] pmm_better_sad;
-	delete [] dsrc; delete [] ddist; 
-	
-	
 } 
 
 
@@ -1038,9 +798,9 @@ void tdrs_both(Mat &src, Mat &dist, Mat &src_image, Mat &IF_image, int *last_mot
 int main(int argc, char**argv)
 {
 	printf("start\n");
-	//string file_name = "/home/iqiyi/Desktop/ESPCN_shijie/True-Motion-Estimation/Oigin_SDBronze.mp4";
-	//string file_name = "/home/iqiyi/Desktop/ESPCN_shijie/True-Motion-Estimation/movie/output.mp4";
-	string file_name = "/home/iqiyi/Desktop/ESPCN_shijie/True-Motion-Estimation/movie/FOREMAN_352x288_30_orig_01.avi";
+	string file_name = "/home/iqiyi/Desktop/ESPCN_shijie/True-Motion-Estimation/Oigin_SDBronze.mp4";
+	//string file_name = "/zhangjie/bbb_sunflower_1080p_60fps_normal.mp4";
+	//string file_name = "/home/iqiyi/Desktop/ESPCN_shijie/True-Motion-Estimation/movie/FOREMAN_352x288_30_orig_01.avi";
 
     int cnt(0), block_size(BLOCKSIZE);
     VideoCapture cap;
@@ -1062,8 +822,7 @@ int main(int argc, char**argv)
     Mat src, dist;
     cap >> src;
 	// *2 --> to save y and x of the motion
-    int *motion_map_forward = new int[src.cols/block_size * src.rows/block_size * 2]();
-	int *motion_map_backward = new int[src.cols/block_size * src.rows/block_size * 2]();
+    int *motion_map = new int[src.cols/block_size * src.rows/block_size * 2]();
 
     chrono::duration<float, milli> dtn;
     float avg_dtn;
@@ -1093,10 +852,9 @@ int main(int argc, char**argv)
 		//imshow("src",gsrc);
 		//imshow("dist",gdist);
 
+        //tdrs(gsrc, gdist, out, motion_map);
 		IF_img = src.clone();
-		//tdrs_MC(gsrc, gdist, out, src, IF_img, motion_map);
-		//bothward: FORWARD and BACKWARD
-		tdrs_both(gsrc, gdist, src, IF_img, motion_map_forward, motion_map_backward);
+		tdrs_MC(gsrc, gdist, out, src, IF_img, motion_map);
 
 		//frame reflash to the next circle
         src = dist.clone();
@@ -1126,7 +884,7 @@ int main(int argc, char**argv)
         if (char(waitKey(1)) == 'q')
             break;
     }
-    delete [] motion_map_forward; delete [] motion_map_backward;
+    delete [] motion_map;
 
 	cout << "the process has been completed" <<endl;
     return 0;
