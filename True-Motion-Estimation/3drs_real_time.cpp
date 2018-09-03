@@ -22,7 +22,7 @@ using namespace cv;
 int BLOCKSIZE = 4;
 int CPU_THREAD = 1;
 int DISTANCE_THEROSHOLD = 80;
-int MV_THRESHOLD = 20;
+int MV_THRESHOLD = 80;
 int ERROR_VALUE = 2048;
 
 float get_max(float *input, int size)
@@ -919,7 +919,7 @@ void select_sad(uchar *src, uchar *dist, int *current_motion_forward, int *curre
 					int src_center[2] = {r*block_size+radius-int(val_backward[0]*0.5), c*block_size+radius-int(val_backward[1]*0.5)};
 					int dist_center[2] = {r*block_size+radius+int(val_backward[0]*0.5), c*block_size+radius+int(val_backward[1]*0.5)};
 
-					backward = get_sad(dist, src, src_center[0], src_center[1], dist_center[0], dist_center[1],src_col);
+					backward = get_sad(dist, src, src_center[1], src_center[0], dist_center[1], dist_center[0],src_col);
 					//cout << backward <<endl;
 				}
 			
@@ -946,6 +946,214 @@ void select_sad(uchar *src, uchar *dist, int *current_motion_forward, int *curre
 		}
 	}
 }
+
+
+void post_processConcer_Line(uchar *dsrc, uchar *ddist, int *motion_Mat ,int *motion_candidate,int src_cols, int current_rows, int current_cols)
+{
+    int block_size(BLOCKSIZE);
+    int block_col(src_cols/block_size);
+	int radius(block_size/2);
+
+	int *cs = new int[6];
+	memcpy(cs,motion_candidate, 6*sizeof(int));
+
+	int candidate[6] = {0};
+	int candidate_mv_a[2] = {0};
+	float candidate_sad[3] = {0};
+	float min_sad(9999999.0);
+
+	for (int index = 0; index <3; index++)
+	{
+        candidate[index*2] = cs[index*2];
+        candidate[index*2 + 1] = cs[index*2 + 1];
+
+		int src_center[2] = {current_rows*block_size+radius-int(candidate[1]*0.5), current_cols*block_size+radius-int(candidate[0]*0.5)};
+		int dist_center[2] = {current_rows*block_size+radius+int(candidate[1]*0.5), current_cols*block_size+radius+int(candidate[0]*0.5)};
+        candidate_sad[index] = get_sad(dsrc, ddist, src_center[1], src_center[0], dist_center[1], dist_center[0] , src_cols);
+		//get min SAD
+		if (candidate_sad[index] < min_sad)
+		{
+			//(y,x)
+			candidate_mv_a[0] = candidate[index*2];
+			candidate_mv_a[1] = candidate[index*2+1];
+		}
+	}
+
+	//assert value
+	*(motion_Mat + current_rows*block_col*2+current_cols*2+0) = candidate_mv_a[0];
+	*(motion_Mat + current_rows*block_col*2+current_cols*2+1) = candidate_mv_a[1];	
+
+	delete [] cs;
+}
+
+
+void post_processBlock(uchar *dsrc, uchar *ddist, int *motion_Mat ,int src_cols, int current_rows, int current_cols)
+{
+    int block_size(BLOCKSIZE);
+    int block_col(src_cols/block_size);
+	int radius(block_size/2);
+
+	int result[8] = {0};
+	int candidate_num = 0;
+
+	for (int mode =0 ; mode<4; mode++)
+	{
+		int cs[6] = {0};
+		if (mode == 0)
+		{
+			//get the neiborhood block
+			int cs[6]= {*(motion_Mat + (current_rows-1)*block_col*2+current_cols*2+0),*(motion_Mat + (current_rows-1)*block_col*2+current_cols*2+1),
+						*(motion_Mat + current_rows*block_col*2+(current_cols-1)*2+0),*(motion_Mat + current_rows*block_col*2+(current_cols-1)*2+1),
+						*(motion_Mat + (current_rows-1)*block_col*2+(current_cols-1)*2+0),*(motion_Mat + (current_rows-1)*block_col*2+(current_cols-1)*2+1)
+						};
+		}else if (mode == 1)
+		{
+			//get the neiborhood block
+			int cs[6]= {*(motion_Mat + (current_rows-1)*block_col*2+current_cols*2+0),*(motion_Mat + (current_rows-1)*block_col*2+current_cols*2+1),
+						*(motion_Mat + current_rows*block_col*2+(current_cols+1)*2+0),*(motion_Mat + current_rows*block_col*2+(current_cols+1)*2+1),
+						*(motion_Mat + (current_rows-1)*block_col*2+(current_cols+1)*2+0),*(motion_Mat + (current_rows-1)*block_col*2+(current_cols+1)*2+1)
+						};
+		}else if (mode == 2)
+		{
+			//get the neiborhood block
+			int cs[6]= {*(motion_Mat + (current_rows+1)*block_col*2+current_cols*2+0),*(motion_Mat + (current_rows+1)*block_col*2+current_cols*2+1),
+						*(motion_Mat + current_rows*block_col*2+(current_cols-1)*2+0),*(motion_Mat + current_rows*block_col*2+(current_cols-1)*2+1),
+						*(motion_Mat + (current_rows+1)*block_col*2+(current_cols-1)*2+0),*(motion_Mat + (current_rows+1)*block_col*2+(current_cols-1)*2+1)
+						};
+		}else if (mode == 3)
+		{
+			//get the neiborhood block
+			int cs[6]= {*(motion_Mat + (current_rows+1)*block_col*2+current_cols*2+0),*(motion_Mat + (current_rows+1)*block_col*2+current_cols*2+1),
+						*(motion_Mat + current_rows*block_col*2+(current_cols+1)*2+0),*(motion_Mat + current_rows*block_col*2+(current_cols+1)*2+1),
+						*(motion_Mat + (current_rows+1)*block_col*2+(current_cols+1)*2+0),*(motion_Mat + (current_rows+1)*block_col*2+(current_cols+1)*2+1)
+						};
+		}
+
+		//Judging direction
+		if(cs[0]*cs[2] >=0 and cs[1]*cs[3] >=0)
+		{		
+			//y
+			result[candidate_num*2]   = (cs[0]+cs[2]+cs[4])/3;
+			//x
+			result[candidate_num*2+1] = (cs[1]+cs[3]+cs[5])/3;
+			candidate_num += 1;
+		}
+	}	
+
+	
+
+	int *cs = new int[8];
+	memcpy(cs,result, candidate_num*2*sizeof(int));
+
+	int candidate[8] = {0};
+	int candidate_mv_a[2] = {0};
+	float candidate_sad[4] = {0};
+	float min_sad(9999999.0);
+
+	for (int index = 0; index <candidate_num; index++)
+	{
+        candidate[index*2] = cs[index*2];
+        candidate[index*2 + 1] = cs[index*2 + 1];
+
+		int src_center[2] = {current_rows*block_size+radius-int(candidate[1]*0.5), current_cols*block_size+radius-int(candidate[0]*0.5)};
+		int dist_center[2] = {current_rows*block_size+radius+int(candidate[1]*0.5), current_cols*block_size+radius+int(candidate[0]*0.5)};
+        candidate_sad[index] = get_sad(dsrc, ddist, src_center[1], src_center[0], dist_center[1], dist_center[0] , src_cols);
+		//get min SAD
+		if (candidate_sad[index] < min_sad)
+		{
+			//(y,x)
+			candidate_mv_a[0] = candidate[index*2];
+			candidate_mv_a[1] = candidate[index*2+1];
+		}
+	}
+
+	//assert value
+	*(motion_Mat + current_rows*block_col*2+current_cols*2+0) = candidate_mv_a[0];
+	*(motion_Mat + current_rows*block_col*2+current_cols*2+1) = candidate_mv_a[1];	
+
+	delete [] cs;
+}
+
+
+
+
+void post_processME(uchar *dsrc, uchar *ddist, int *motion_Mat, int src_rows, int src_cols)
+{
+    int block_size(BLOCKSIZE);
+    int block_row(src_rows/block_size), block_col(src_cols/block_size);
+	int radius(block_size/2);
+
+	for (int r = 0; r < block_row; r++)
+	{
+		for (int c = 0; c < block_col; c++)
+		{
+			//case1 and case2
+			if (c == 0 or c == block_col-1 or r ==0 or r == block_row-1)
+			{
+				//case 1: four concers
+				if(r==0 and c==0)
+				{
+					//(y,x)
+					int current_motion[6] = {*(motion_Mat + r*block_col*2+c*2+0),*(motion_Mat + r*block_col*2+c*2+1),
+											 *(motion_Mat + r*block_col*2+(c+1)*2+0),*(motion_Mat + r*block_col*2+(c+1)*2+1),
+											 *(motion_Mat + (r+1)*block_col*2+c*2+0),*(motion_Mat + (r+1)*block_col*2+c*2+1)
+											};				
+					post_processConcer_Line(dsrc, ddist,  motion_Mat, current_motion,src_cols,r,c);
+				}else if(r==0 and c==block_col-1)
+				{
+					//(y,x)
+					int current_motion[6] = {*(motion_Mat + r*block_col*2+c*2+0),*(motion_Mat + r*block_col*2+c*2+1),
+											 *(motion_Mat + r*block_col*2+(c-1)*2+0),*(motion_Mat + r*block_col*2+(c-1)*2+1),
+											 *(motion_Mat + (r+1)*block_col*2+c*2+0),*(motion_Mat + (r+1)*block_col*2+c*2+1)
+											};	
+					post_processConcer_Line(dsrc, ddist,  motion_Mat, current_motion,src_cols,r,c);
+				}else if(r==block_row-1 and c==0)
+				{
+					//(y,x)
+					int current_motion[6] = {*(motion_Mat + r*block_col*2+c*2+0),*(motion_Mat + r*block_col*2+c*2+1),
+											 *(motion_Mat + r*block_col*2+(c+1)*2+0),*(motion_Mat + r*block_col*2+(c+1)*2+1),
+											 *(motion_Mat + (r-1)*block_col*2+c*2+0),*(motion_Mat + (r-1)*block_col*2+c*2+1)
+											};	
+					post_processConcer_Line(dsrc, ddist,  motion_Mat, current_motion,src_cols,r,c);
+				}else if(r==block_row-1 and c==block_col-1)
+				{
+					//(y,x)
+					int current_motion[6] = {*(motion_Mat + r*block_col*2+c*2+0),*(motion_Mat + r*block_col*2+c*2+1),
+											 *(motion_Mat + r*block_col*2+(c-1)*2+0),*(motion_Mat + r*block_col*2+(c-1)*2+1),
+											 *(motion_Mat + (r-1)*block_col*2+c*2+0),*(motion_Mat + (r-1)*block_col*2+c*2+1)
+											};	
+					post_processConcer_Line(dsrc, ddist,  motion_Mat, current_motion,src_cols,r,c);
+				}
+				else//case 2: four lines
+				{
+					//h:two lines 
+					if(r == 0 or r == block_row-1)
+					{
+						int current_motion[6] = {*(motion_Mat + r*block_col*2+c*2+0),*(motion_Mat + r*block_col*2+c*2+1),
+												 *(motion_Mat + r*block_col*2+(c-1)*2+0),*(motion_Mat + r*block_col*2+(c-1)*2+1),
+												 *(motion_Mat + r*block_col*2+(c+1)*2+0),*(motion_Mat + r*block_col*2+(c+1)*2+1)
+												};	
+						post_processConcer_Line(dsrc, ddist,  motion_Mat, current_motion,src_cols,r,c);
+					}else if(c == 0 or c == block_col-1)	//v: two lines
+					{
+						int current_motion[6] = {*(motion_Mat + r*block_col*2+c*2+0),*(motion_Mat + r*block_col*2+c*2+1),
+												 *(motion_Mat + (r+1)*block_col*2+c*2+0),*(motion_Mat + (r+1)*block_col*2+c*2+1),
+												 *(motion_Mat + (r-1)*block_col*2+c*2+0),*(motion_Mat + (r-1)*block_col*2+c*2+1)
+												};	
+						post_processConcer_Line(dsrc, ddist,  motion_Mat, current_motion,src_cols,r,c);
+					}else	//normal block
+					{
+						//
+						post_processBlock(dsrc, ddist,  motion_Mat, src_cols, r, c);
+					}
+				}
+			}
+
+		
+		}
+	}
+}
+
 
 
 //imread generate a continous matrix
@@ -981,8 +1189,9 @@ void tdrs_both(Mat &src, Mat &dist, Mat &src_image, Mat &IF_image, int *last_mot
     plmm_b = new int[size];
     memcpy(plmm_b, last_motion_backward, size*sizeof(int));
 
-	int *pmm_better_sad;
-	pmm_better_sad = new int[size];
+	int *pmm_better_sad_f, *pmm_better_sad_b;
+	pmm_better_sad_f = new int[size];
+	pmm_better_sad_b = new int[size];
 
     int total_thread = CPU_THREAD;
     thread ts_f[total_thread];
@@ -1007,16 +1216,28 @@ void tdrs_both(Mat &src, Mat &dist, Mat &src_image, Mat &IF_image, int *last_mot
         ts_b[i].join();
 	}
 
+	//Post-process the ME
+	post_processME(dsrc, ddist, pmm_f, row, col);
+	post_processME(ddist, dsrc, pmm_b, row, col);
+
 
 	//select the better SAD
-	select_sad(dsrc, ddist, pmm_f, pmm_b, pmm_better_sad, row, col);
+	select_sad(dsrc, ddist, pmm_f, pmm_b, pmm_better_sad_f, row, col);
 	
 	//mv mean
-	//MV_without_abnormal(pmm_better_sad,row,col);
+	//MV_without_abnormal(pmm_better_sad_f,row,col);
+
+	//change the value from pmm_better_sad_f to pmm_better_sad_b
+	memcpy(pmm_better_sad_b, pmm_better_sad_f, size*sizeof(int));
+	for (int i = 0; i < size; i++)
+	{
+		*(pmm_better_sad_b+i) = -*(pmm_better_sad_b+i);
+	}
+	
 
     //update last_motion for next frame
-    memcpy(last_motion_forward, pmm_better_sad, size*sizeof(int));
-    memcpy(last_motion_backward, pmm_better_sad, size*sizeof(int));
+    memcpy(last_motion_forward, pmm_better_sad_f, size*sizeof(int));
+    memcpy(last_motion_backward, pmm_better_sad_b, size*sizeof(int));
 
 	//IF_bothward
 	Mat dist_image = IF_image.clone();
@@ -1026,7 +1247,7 @@ void tdrs_both(Mat &src, Mat &dist, Mat &src_image, Mat &IF_image, int *last_mot
     delete [] pmm_f; delete [] plmm_f; 
     delete [] pmm_b; delete [] plmm_b;
 	delete [] motion_map_forward; delete [] motion_map_backward;
-	delete [] pmm_better_sad;
+	delete [] pmm_better_sad_f; delete [] pmm_better_sad_b;
 	delete [] dsrc; delete [] ddist; 
 	
 	
