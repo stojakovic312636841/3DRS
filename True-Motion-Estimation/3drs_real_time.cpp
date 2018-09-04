@@ -23,7 +23,7 @@ int BLOCKSIZE = 4;
 int CPU_THREAD = 1;
 int DISTANCE_THEROSHOLD = 80;
 int MV_THRESHOLD = 80;
-int ERROR_VALUE = 2048;
+int ERROR_VALUE = 65535;
 
 float get_max(float *input, int size)
 {
@@ -154,7 +154,6 @@ void oaat(uchar *src, uchar *dist, int *output, int *center, int *block_center, 
             break;
         }
 
-		//printf("update = %d,%d\n",update[0],update[1]);
         *block_center = update[0];
         *(block_center + 1) = update[1];
     }
@@ -439,8 +438,7 @@ void tdrs_thread(uchar *dsrc, uchar *ddist, int *plmm, int *pmm, int src_rows, i
                 {
                     bool out_of_boundary(false);
                     int eval_center[2] = {center[0] - cs[index*2],  center[1] - cs[index*2 + 1]}; //???? - or +
-
-                    if (eval_center[0] < radius or eval_center[1] < radius or eval_center[0] >= src_cols - radius or eval_center[1] >= src_rows - radius)
+                    if (eval_center[0] < radius or eval_center[1] < radius or eval_center[0] > src_cols - radius or eval_center[1] > src_rows - radius)
                         out_of_boundary = true;
                     if (out_of_boundary)
                         continue;
@@ -507,10 +505,12 @@ void tdrs_thread(uchar *dsrc, uchar *ddist, int *plmm, int *pmm, int src_rows, i
                     //get SAD from each candidate, there are 4 candidate each time
                     for (int index = 0; index < 5; index++)
                     {
-                        bool out_of_boundary_a(false), out_of_boundary_b(false);
-                        int eval_center_a[2] = {center[0] - cs_a[index*2],  center[1] - cs_a[index*2 + 1]};
+                        bool out_of_boundary_a(false);
+						//both ward
+                        int eval_center[2] = {center[0] - cs_a[index*2],  center[1] - cs_a[index*2+1]};
+						
 
-                        if (eval_center_a[0] < radius or eval_center_a[1] < radius or eval_center_a[0] > src_cols - radius or eval_center_a[1] > src_rows - radius)
+                        if (eval_center[0] < radius or eval_center[1] < radius or eval_center[0] > src_cols - radius or eval_center[1] > src_rows - radius)
                             out_of_boundary_a = true;
                         if (out_of_boundary_a)
                             continue;
@@ -519,12 +519,13 @@ void tdrs_thread(uchar *dsrc, uchar *ddist, int *plmm, int *pmm, int src_rows, i
                         {
                             candidate_a[index*2] = cs_a[index*2];
                             candidate_a[index*2 + 1] = cs_a[index*2 + 1];
-                            candidate_sad_a[index] = get_sad(dsrc, ddist, center[0], center[1], eval_center_a[0], eval_center_a[1] , src_cols);
+                            candidate_sad_a[index] = get_sad(dsrc, ddist, center[0], center[1], eval_center[0], eval_center[1] , src_cols);
+							//cout << candidate_sad_a[index] << "	";
                             candidate_index_a[index] = 1;
                         }
 
                     }
-
+					//cout << endl;
                     //compute penalty from each candidate
                     float min_sad_a(100000.);
                     int tmp_update_a[2] = {0};
@@ -596,19 +597,42 @@ void tdrs_thread(uchar *dsrc, uchar *ddist, int *plmm, int *pmm, int src_rows, i
                     }
                 }
 
- 
+
                 *(pmm + (r*block_col*2 + c*2)) = Da_current[0];
                 *(pmm + (r*block_col*2 + c*2 + 1)) = Da_current[1]; //motion_map[r][c] = Da_current
 
- 
-
-
+				//if( Da_current[0] > 10 or  Da_current[1] >10)
+					//cout << Da_current[0] << "	"<< Da_current[1] << endl;
             }
 
         }
     }
 }
 
+
+
+void draw_arrow(Mat &src, Mat &dist, Mat &draw, int *last_motion)
+{
+    int block_size(BLOCKSIZE), radius(block_size/2);
+    int row(src.rows), col(src.cols);
+    int block_row(row/block_size), block_col(col/block_size);
+
+	//draw the arrowed line
+    for (int r = 0; r < block_row; r++)
+    {
+        for (int c = 0; c < block_col; c++)
+        {
+            if ( *(last_motion + r*block_col*2 + c*2) != 0 or *(last_motion + r*block_col*2 + c*2 + 1) != 0)
+            {
+                Point motion(*(last_motion + r*block_col*2 + c*2) , *(last_motion + r*block_col*2 + c*2+1 ));
+                Point center(c*block_size + radius, r*block_size + radius);
+                Point from = center - motion;
+                arrowedLine(draw, from, center, Scalar(0,255,0));
+            }
+        }
+    }
+
+}
 
 
 //imread generate a continous matrix
@@ -814,14 +838,16 @@ void tdrs_MC(Mat &src, Mat &dist, Mat &draw, Mat &src_image, Mat &IF_image,int *
 } 
 
 
+
+
 //imread generate a continous matrix
-void general_IF_MC(Mat &src_image, Mat &IF_image, Mat &dist_image, int *last_motion)
+void general_IF_MC_Forward(Mat &src_image, Mat &IF_image, Mat &dist_image, int *last_motion)
 {
     int block_size(BLOCKSIZE), radius(block_size/2);
     int row(src_image.rows), col(src_image.cols);
     int block_row(row/block_size), block_col(col/block_size);
 
-	//Both ward
+	//Forward MC
 	for (int r = 0; r< block_row; r++)
 	{
 		for (int c = 0; c< block_col;c++)
@@ -837,36 +863,18 @@ void general_IF_MC(Mat &src_image, Mat &IF_image, Mat &dist_image, int *last_mot
 				{
 					for (int b = 0; b < block_size; b++)
 					{
-						Point loc_dist_prev(r*block_size+a-motion.x,c*block_size+b-motion.y);
-						Point loc_dist_next(r*block_size+a+motion.x,c*block_size+b+motion.y);
-						if ((loc_dist_prev.x <0) or (loc_dist_prev.x > row-1) or (loc_dist_prev.y <0 ) or (loc_dist_prev.y > col-1) or (loc_dist_next.x <0) or (loc_dist_next.x > row-1) or (loc_dist_next.y <0 ) or (loc_dist_next.y > col-1))
+						Point loc_dist(r*block_size+a+motion.x,c*block_size+b+motion.y);
+						if ((loc_dist.x <0) or (loc_dist.x > row-1) or (loc_dist.y <0 ) or (loc_dist.y > col-1))
 						{
-							//cout << loc_dist_prev.x << " " << loc_dist_prev.y << " ; " << loc_dist_next.x << " " << loc_dist_next.y << " ; " << endl;
+							//cout << "out of the edge, x is " << loc_dist.x << "and y is " << loc_dist.y << endl;
 							continue;
 						}
 						else
 						{
-							if((*(last_motion + r*block_col*2 + c*2) != ERROR_VALUE) and (*(last_motion + r*block_col*2 + c*2+1) != ERROR_VALUE))
-							{
-								Vec3b src_pix = src_image.at<Vec3b>(r*block_size+a-motion.x,c*block_size+b-motion.y);
-								Vec3b dist_pix = dist_image.at<Vec3b>(r*block_size+a+motion.x,c*block_size+b+motion.y);
-								for (int i = 0;i <3 ;i++)
-								{
-									IF_image.at<Vec3b>(r*block_size+a,c*block_size+b)[i] = int(0.5*(src_pix[i]+dist_pix[i]));			
-								}
-								//cout << src_pix << endl;
-								//cout << IF_image.at<Vec3b>(block_row*block_size+a+motion.x,block_col*block_size+b+motion.y) << endl;
-							}
-							else
-							{
-								Vec3b src_pix = src_image.at<Vec3b>(r*block_size+a,c*block_size+b);
-								Vec3b dist_pix = dist_image.at<Vec3b>(r*block_size+a,c*block_size+b);
-								for (int i = 0;i <3 ;i++)
-								{
-									IF_image.at<Vec3b>(r*block_size+a,c*block_size+b)[i] = int(0.5*(src_pix[i]+dist_pix[i]));			
-								}
-							}
-
+							Vec3b src_pix = src_image.at<Vec3b>(r*block_size+a,c*block_size+b);
+							//cout << src_pix << endl;
+							IF_image.at<Vec3b>(r*block_size+a+motion.x,c*block_size+b+motion.y) = src_pix;
+							//cout << IF_image.at<Vec3b>(block_row*block_size+a+motion.x,block_col*block_size+b+motion.y) << endl;
 						}
  
 					}
@@ -874,14 +882,88 @@ void general_IF_MC(Mat &src_image, Mat &IF_image, Mat &dist_image, int *last_mot
 			}	
 		}
 	}
+	
  
 
 }
 
 
 
+
+
+//imread generate a continous matrix
+void general_IF_MC(Mat &src_image, Mat &IF_image, Mat &dist_image, int *last_motion, int *flag_map)
+{
+    int block_size(BLOCKSIZE), radius(block_size/2);
+    int row(src_image.rows), col(src_image.cols);
+    int block_row(row/block_size), block_col(col/block_size);
+	int num=0;
+
+	//Both ward
+	for (int r = 0; r< block_row; r++)
+	{
+		for (int c = 0; c< block_col;c++)
+		{
+			if (*(last_motion + r*block_col*2 + c*2) != 0 or *(last_motion + r*block_col*2 + c*2 + 1) != 0)	
+			{
+				//fix this bug!!!! last_motion --> (y,x)
+				Point motion(*(last_motion + r*block_col*2 + c*2+1) , *(last_motion + r*block_col*2 + c*2));
+				
+				if(*(flag_map + r*block_col*2 + c*2+0) == 1 and *(flag_map + r*block_col*2 + c*2+1) == 1)
+				{
+					motion.x = 0;
+					motion.y = 0;
+					//
+					num += 1;
+				}
+				else
+				{
+					motion.x = int(motion.x*0.5);
+					motion.y = int(motion.y*0.5);
+				}
+
+				//if(motion.x != 0 and motion.y != 0)
+					//cout << "motion.x/y is " << motion.x << "	" << motion.y << endl;
+
+				for (int a = 0; a< block_size; a++)
+				{
+					for (int b = 0; b < block_size; b++)
+					{
+						Point loc_dist_prev(r*block_size+a-motion.x,c*block_size+b-motion.y);
+						Point loc_dist_next(r*block_size+a+motion.x,c*block_size+b+motion.y);
+						if ((loc_dist_prev.x <0) or (loc_dist_prev.x > row-1) or (loc_dist_prev.y <0 ) or (loc_dist_prev.y > col-1) or (loc_dist_next.x <0) or (loc_dist_next.x > row-1) or (loc_dist_next.y <0 ) or (loc_dist_next.y > col-1))
+						{
+							Vec3b src_pix = src_image.at<Vec3b>(r*block_size+a,c*block_size+b);
+							Vec3b dist_pix = dist_image.at<Vec3b>(r*block_size+a,c*block_size+b);
+							for (int i = 0;i <3 ;i++)
+							{
+								IF_image.at<Vec3b>(r*block_size+a,c*block_size+b)[i] = int(0.5*(src_pix[i]+dist_pix[i]));			
+							}
+						}
+						else
+						{
+							Vec3b src_pix = src_image.at<Vec3b>(r*block_size+a-motion.x,c*block_size+b-motion.y);
+							Vec3b dist_pix = dist_image.at<Vec3b>(r*block_size+a+motion.x,c*block_size+b+motion.y);
+							for (int i = 0;i <3 ;i++)
+							{
+								IF_image.at<Vec3b>(r*block_size+a,c*block_size+b)[i] = int(0.5*(src_pix[i]+dist_pix[i]));			
+							}
+						}
+ 
+					}
+				}
+			}	
+		}
+	}
+
+	//debug 
+	cout << num << endl;
+}
+
+
+
 //Select the better SAD
-void select_sad(uchar *src, uchar *dist, int *current_motion_forward, int *current_motion_backward, int *sad_motion_map, int src_row, int src_col)
+void select_sad(uchar *src, uchar *dist, int *current_motion_forward, int *current_motion_backward, int *sad_motion_map, int *sad_flag_map,int src_row, int src_col)
 {
     int block_size(BLOCKSIZE), radius(block_size/2);
     int row(src_row), col(src_col);
@@ -892,54 +974,105 @@ void select_sad(uchar *src, uchar *dist, int *current_motion_forward, int *curre
 	{
 		for (int c = 0; c< block_col;c++)
 		{
-			int val_forward[2] = {int(*(current_motion_forward + r*block_col*2 + c*2+1)),int(*(current_motion_forward + r*block_col*2 + c*2))};
-			int val_backward[2] = {int(*(current_motion_backward + r*block_col*2 + c*2+1)),int(*(current_motion_backward + r*block_col*2 + c*2))};
+			int val_forward[2] = {int(*(current_motion_forward + r*block_col*2 + c*2)),int(*(current_motion_forward + r*block_col*2 + c*2+1))};
+			int val_backward[2] = {int(*(current_motion_backward + r*block_col*2 + c*2)),int(*(current_motion_backward + r*block_col*2 + c*2+1))};
 
 			//the vector of the both direction motion is equal
 			if ((fabs(val_forward[0]) == fabs(val_backward[0])) and (fabs(val_forward[1]) == fabs(val_backward[1])))	
 			{
-				*(sad_motion_map + r*block_col*2 + c*2+1) = val_forward[0];
-				*(sad_motion_map + r*block_col*2 + c*2) = val_forward[1];
+				*(sad_motion_map + r*block_col*2 + c*2) = val_forward[0];
+				*(sad_motion_map + r*block_col*2 + c*2+1) = val_forward[1];
+
 			}
 			else
 			{
-				int forward_sad(0), backward(0);
+				//cout << val_forward[0] << "	" << val_forward[1] << "	";
+				//cout << val_backward[0] << "	" << val_backward[1] << endl;
+				int forward_sad(0), backward_sad(0);
 
 				{
-					//forward SAD
-					int src_center[2] = {r*block_size+radius-int(val_forward[0]*0.5), c*block_size+radius-int(val_forward[1]*0.5)};
-					int dist_center[2] = {r*block_size+radius+int(val_forward[0]*0.5), c*block_size+radius+int(val_forward[1]*0.5)};
 
-					forward_sad = get_sad(src, dist, src_center[0], src_center[1], dist_center[0], dist_center[1],src_col);
-					//cout << forward_sad <<endl;
+					//forward SAD
+					int src_center[2] = {r*block_size+radius-int(val_forward[1]*0.5), c*block_size+radius-int(val_forward[0]*0.5)};
+					int dist_center[2] = {r*block_size+radius+int(val_forward[1]*0.5), c*block_size+radius+int(val_forward[0]*0.5)};
+
+                    bool out_of_boundary(false);
+                    if (src_center[0] < radius or src_center[1] < radius or src_center[0] > row - radius or src_center[1] > col - radius)
+                        out_of_boundary = true;
+                    if (dist_center[0] < radius or dist_center[1] < radius or dist_center[0] > row - radius or dist_center[1] > col - radius)
+                        out_of_boundary = true;
+
+					if (out_of_boundary == false)
+					{
+						forward_sad = get_sad(src, dist, src_center[1], src_center[0], dist_center[1], dist_center[0],src_col);
+					}
+					else
+					{
+						//cout << "forward out_of_boundary" << endl;
+						forward_sad = ERROR_VALUE;
+					}
+					
+					
 				}
 
 				{
 					//backward SAD
-					int src_center[2] = {r*block_size+radius-int(val_backward[0]*0.5), c*block_size+radius-int(val_backward[1]*0.5)};
-					int dist_center[2] = {r*block_size+radius+int(val_backward[0]*0.5), c*block_size+radius+int(val_backward[1]*0.5)};
+					int src_center[2] = {r*block_size+radius-int(val_backward[1]*0.5), c*block_size+radius-int(val_backward[0]*0.5)};
+					int dist_center[2] = {r*block_size+radius+int(val_backward[1]*0.5), c*block_size+radius+int(val_backward[0]*0.5)};
 
-					backward = get_sad(dist, src, src_center[1], src_center[0], dist_center[1], dist_center[0],src_col);
-					//cout << backward <<endl;
-				}
-			
+                    bool out_of_boundary(false);
+                    if (src_center[0] < radius or src_center[1] < radius or src_center[0] > row - radius or src_center[1] > col - radius)
+                        out_of_boundary = true;
+                    if (dist_center[0] < radius or dist_center[1] < radius or dist_center[0] > row - radius or dist_center[1] > col - radius)
+                        out_of_boundary = true;
 
-				if((forward_sad <= backward) and (forward_sad < MV_THRESHOLD))
-				{
-					*(sad_motion_map + r*block_col*2 + c*2+1) = val_forward[0];
-					*(sad_motion_map + r*block_col*2 + c*2) = val_forward[1];	
+					if (out_of_boundary == false)
+					{
+						backward_sad = get_sad(dist, src, src_center[1], src_center[0], dist_center[1], dist_center[0],src_col);
+					}
+					else
+					{
+						//cout << "backward out_of_boundary" << endl;
+						backward_sad = ERROR_VALUE;
+					}
 				}
-				else if((backward <= forward_sad) and (backward < MV_THRESHOLD))
+
+				if(val_backward[1] !=0 and val_forward[1] != 0)
+				//cout << forward_sad << "	" << backward_sad << ";	"<<val_backward[1] <<	"	" << val_forward[1] << "	"<< val_backward[0] <<	"	" << val_forward[0]<<endl;
+
+				if((forward_sad <= backward_sad) )
 				{
-					*(sad_motion_map + r*block_col*2 + c*2+1) = -val_backward[0];
-					*(sad_motion_map + r*block_col*2 + c*2) = -val_backward[1];	
+					*(sad_motion_map + r*block_col*2 + c*2) = val_forward[0];
+					*(sad_motion_map + r*block_col*2 + c*2+1) = val_forward[1];
+
+					if(forward_sad > MV_THRESHOLD)
+					{
+						*(sad_flag_map + r*block_col*2 + c*2) = 1;
+						*(sad_flag_map + r*block_col*2 + c*2+1) = 1;
+					}
+					else
+					{
+						*(sad_flag_map + r*block_col*2 + c*2) = 0;
+						*(sad_flag_map + r*block_col*2 + c*2+1) = 0;
+					}
 				}
-				else
+				else if((backward_sad <= forward_sad) )
 				{
-					//cout << "F: " << forward_sad << "; B: " << backward << endl;
-					*(sad_motion_map + r*block_col*2 + c*2+1) = ERROR_VALUE;
-					*(sad_motion_map + r*block_col*2 + c*2) = ERROR_VALUE;	
+					*(sad_motion_map + r*block_col*2 + c*2) = -val_backward[0];
+					*(sad_motion_map + r*block_col*2 + c*2+1) = -val_backward[1];
+
+					if(backward_sad > MV_THRESHOLD)	
+					{
+						*(sad_flag_map + r*block_col*2 + c*2) = 1;
+						*(sad_flag_map + r*block_col*2 + c*2+1) = 1;
+					}
+					else
+					{
+						*(sad_flag_map + r*block_col*2 + c*2) = 0;
+						*(sad_flag_map + r*block_col*2 + c*2+1) = 0;
+					}
 				}
+
 			}
 
 			//cout << *(sad_motion_map + r*block_col*2 + c*2) << "	" << *(sad_motion_map + r*block_col*2 + c*2+1) <<endl;	
@@ -948,10 +1081,11 @@ void select_sad(uchar *src, uchar *dist, int *current_motion_forward, int *curre
 }
 
 
-void post_processConcer_Line(uchar *dsrc, uchar *ddist, int *motion_Mat ,int *motion_candidate,int src_cols, int current_rows, int current_cols)
+void post_processConcer_Line(uchar *dsrc, uchar *ddist, int *motion_Mat ,int *motion_candidate, int src_rows, int src_cols, int current_rows, int current_cols)
 {
     int block_size(BLOCKSIZE);
     int block_col(src_cols/block_size);
+	int row(src_rows),col(src_cols);
 	int radius(block_size/2);
 
 	int *cs = new int[6];
@@ -969,14 +1103,33 @@ void post_processConcer_Line(uchar *dsrc, uchar *ddist, int *motion_Mat ,int *mo
 
 		int src_center[2] = {current_rows*block_size+radius-int(candidate[1]*0.5), current_cols*block_size+radius-int(candidate[0]*0.5)};
 		int dist_center[2] = {current_rows*block_size+radius+int(candidate[1]*0.5), current_cols*block_size+radius+int(candidate[0]*0.5)};
-        candidate_sad[index] = get_sad(dsrc, ddist, src_center[1], src_center[0], dist_center[1], dist_center[0] , src_cols);
-		//get min SAD
-		if (candidate_sad[index] < min_sad)
+
+        bool out_of_boundary(false);
+        if (src_center[0] < radius or src_center[1] < radius or src_center[0] > row - radius or src_center[1] > col - radius)
+            out_of_boundary = true;
+        if (dist_center[0] < radius or dist_center[1] < radius or dist_center[0] > row - radius or dist_center[1] > col - radius)
+            out_of_boundary = true;
+
+		if (out_of_boundary == false)
 		{
-			//(y,x)
-			candidate_mv_a[0] = candidate[index*2];
-			candidate_mv_a[1] = candidate[index*2+1];
+			candidate_sad[index] = get_sad(dsrc, ddist, src_center[1], src_center[0], dist_center[1], dist_center[0] , src_cols);
+
+			//get min SAD
+			if (candidate_sad[index] < min_sad)
+			{
+				//(y,x)
+				candidate_mv_a[0] = candidate[index*2];
+				candidate_mv_a[1] = candidate[index*2+1];
+			}
 		}
+		else
+		{
+			//cout << "out boundary " <<endl;			
+			continue;
+		}
+
+        
+
 	}
 
 	//assert value
@@ -987,18 +1140,51 @@ void post_processConcer_Line(uchar *dsrc, uchar *ddist, int *motion_Mat ,int *mo
 }
 
 
-void post_processBlock(uchar *dsrc, uchar *ddist, int *motion_Mat ,int src_cols, int current_rows, int current_cols)
+void post_processBlock(uchar *dsrc, uchar *ddist, int *motion_Mat ,int src_rows ,int src_cols , int current_rows, int current_cols)
 {
     int block_size(BLOCKSIZE);
     int block_col(src_cols/block_size);
+	int row(src_rows),col(src_cols);
 	int radius(block_size/2);
 
 	int result[8] = {0};
 	int candidate_num = 0;
 
+	//the neiborhood of 8 block is same
+	{
+		int nb_y[9] = { *(motion_Mat + (current_rows-1)*block_col*2+(current_cols-1)*2+0),
+					*(motion_Mat + (current_rows-1)*block_col*2+(current_cols+0)*2+0),
+					*(motion_Mat + (current_rows-1)*block_col*2+(current_cols+1)*2+0),
+					*(motion_Mat + (current_rows+0)*block_col*2+(current_cols-1)*2+0),
+					*(motion_Mat + (current_rows+0)*block_col*2+(current_cols+0)*2+0),
+					*(motion_Mat + (current_rows+0)*block_col*2+(current_cols+1)*2+0),
+					*(motion_Mat + (current_rows+1)*block_col*2+(current_cols-1)*2+0),
+					*(motion_Mat + (current_rows+1)*block_col*2+(current_cols+0)*2+0),
+					*(motion_Mat + (current_rows+1)*block_col*2+(current_cols+1)*2+0)
+					};
+
+		int nb_x[9] = { *(motion_Mat + (current_rows-1)*block_col*2+(current_cols-1)*2+1),
+					*(motion_Mat + (current_rows-1)*block_col*2+(current_cols+0)*2+1),
+					*(motion_Mat + (current_rows-1)*block_col*2+(current_cols+1)*2+1),
+					*(motion_Mat + (current_rows+0)*block_col*2+(current_cols-1)*2+1),
+					*(motion_Mat + (current_rows+0)*block_col*2+(current_cols+0)*2+1),
+					*(motion_Mat + (current_rows+0)*block_col*2+(current_cols+1)*2+1),
+					*(motion_Mat + (current_rows+1)*block_col*2+(current_cols-1)*2+1),
+					*(motion_Mat + (current_rows+1)*block_col*2+(current_cols+0)*2+1),
+					*(motion_Mat + (current_rows+1)*block_col*2+(current_cols+1)*2+1)
+					};
+
+		if((nb_y[0] == nb_y[1] == nb_y[2] == nb_y[3] == nb_y[4] == nb_y[5] == nb_y[6] == nb_y[7] == nb_y[8]) and (nb_x[0] == nb_x[1] == nb_x[2] == nb_x[3] == nb_x[4] == nb_x[5] == nb_x[6] == nb_x[7] == nb_x[8]))
+		{
+			//cout << "8 block is same" << endl;
+			return;
+		}
+
+
+	}
+
 	for (int mode =0 ; mode<4; mode++)
 	{
-		int cs[6] = {0};
 		if (mode == 0)
 		{
 			//get the neiborhood block
@@ -1006,6 +1192,19 @@ void post_processBlock(uchar *dsrc, uchar *ddist, int *motion_Mat ,int src_cols,
 						*(motion_Mat + current_rows*block_col*2+(current_cols-1)*2+0),*(motion_Mat + current_rows*block_col*2+(current_cols-1)*2+1),
 						*(motion_Mat + (current_rows-1)*block_col*2+(current_cols-1)*2+0),*(motion_Mat + (current_rows-1)*block_col*2+(current_cols-1)*2+1)
 						};
+					
+			//Judging direction
+			if(cs[0]*cs[2] >=0 and cs[1]*cs[3] >=0)
+			{		
+				//y
+				result[candidate_num*2]   = (cs[0]+cs[2]+cs[4])/3;
+				//x
+				result[candidate_num*2+1] = (cs[1]+cs[3]+cs[5])/3;
+				candidate_num += 1;	
+			}
+			
+			continue;
+
 		}else if (mode == 1)
 		{
 			//get the neiborhood block
@@ -1013,6 +1212,18 @@ void post_processBlock(uchar *dsrc, uchar *ddist, int *motion_Mat ,int src_cols,
 						*(motion_Mat + current_rows*block_col*2+(current_cols+1)*2+0),*(motion_Mat + current_rows*block_col*2+(current_cols+1)*2+1),
 						*(motion_Mat + (current_rows-1)*block_col*2+(current_cols+1)*2+0),*(motion_Mat + (current_rows-1)*block_col*2+(current_cols+1)*2+1)
 						};
+
+			//Judging direction
+			if(cs[0]*cs[2] >=0 and cs[1]*cs[3] >=0)
+			{		
+				//y
+				result[candidate_num*2]   = (cs[0]+cs[2]+cs[4])/3;
+				//x
+				result[candidate_num*2+1] = (cs[1]+cs[3]+cs[5])/3;
+				candidate_num += 1;	
+			}
+
+			continue;
 		}else if (mode == 2)
 		{
 			//get the neiborhood block
@@ -1020,6 +1231,18 @@ void post_processBlock(uchar *dsrc, uchar *ddist, int *motion_Mat ,int src_cols,
 						*(motion_Mat + current_rows*block_col*2+(current_cols-1)*2+0),*(motion_Mat + current_rows*block_col*2+(current_cols-1)*2+1),
 						*(motion_Mat + (current_rows+1)*block_col*2+(current_cols-1)*2+0),*(motion_Mat + (current_rows+1)*block_col*2+(current_cols-1)*2+1)
 						};
+
+			//Judging direction
+			if(cs[0]*cs[2] >=0 and cs[1]*cs[3] >=0)
+			{		
+				//y
+				result[candidate_num*2]   = (cs[0]+cs[2]+cs[4])/3;
+				//x
+				result[candidate_num*2+1] = (cs[1]+cs[3]+cs[5])/3;
+				candidate_num += 1;	
+			}
+
+			continue;
 		}else if (mode == 3)
 		{
 			//get the neiborhood block
@@ -1027,23 +1250,20 @@ void post_processBlock(uchar *dsrc, uchar *ddist, int *motion_Mat ,int src_cols,
 						*(motion_Mat + current_rows*block_col*2+(current_cols+1)*2+0),*(motion_Mat + current_rows*block_col*2+(current_cols+1)*2+1),
 						*(motion_Mat + (current_rows+1)*block_col*2+(current_cols+1)*2+0),*(motion_Mat + (current_rows+1)*block_col*2+(current_cols+1)*2+1)
 						};
-		}
 
-		//Judging direction
-		if(cs[0]*cs[2] >=0 and cs[1]*cs[3] >=0)
-		{		
-			//y
-			result[candidate_num*2]   = (cs[0]+cs[2]+cs[4])/3;
-			//x
-			result[candidate_num*2+1] = (cs[1]+cs[3]+cs[5])/3;
-			candidate_num += 1;
+			//Judging direction
+			if(cs[0]*cs[2] >=0 and cs[1]*cs[3] >=0)
+			{		
+				//y
+				result[candidate_num*2]   = (cs[0]+cs[2]+cs[4])/3;
+				//x
+				result[candidate_num*2+1] = (cs[1]+cs[3]+cs[5])/3;
+				candidate_num += 1;	
+			}
+
+			continue;
 		}
 	}	
-
-	
-
-	int *cs = new int[8];
-	memcpy(cs,result, candidate_num*2*sizeof(int));
 
 	int candidate[8] = {0};
 	int candidate_mv_a[2] = {0};
@@ -1052,26 +1272,49 @@ void post_processBlock(uchar *dsrc, uchar *ddist, int *motion_Mat ,int src_cols,
 
 	for (int index = 0; index <candidate_num; index++)
 	{
-        candidate[index*2] = cs[index*2];
-        candidate[index*2 + 1] = cs[index*2 + 1];
+        candidate[index*2] = result[index*2];
+        candidate[index*2 + 1] = result[index*2 + 1];
 
-		int src_center[2] = {current_rows*block_size+radius-int(candidate[1]*0.5), current_cols*block_size+radius-int(candidate[0]*0.5)};
-		int dist_center[2] = {current_rows*block_size+radius+int(candidate[1]*0.5), current_cols*block_size+radius+int(candidate[0]*0.5)};
-        candidate_sad[index] = get_sad(dsrc, ddist, src_center[1], src_center[0], dist_center[1], dist_center[0] , src_cols);
-		//get min SAD
-		if (candidate_sad[index] < min_sad)
+		int src_center[2] = {current_rows*block_size+radius-int(candidate[index*2 + 1]*0.5), current_cols*block_size+radius-int(candidate[index*2]*0.5)};
+		int dist_center[2] = {current_rows*block_size+radius+int(candidate[index*2 + 1]*0.5), current_cols*block_size+radius+int(candidate[index*2]*0.5)};
+
+        bool out_of_boundary(false);
+        if (src_center[0] < radius or src_center[1] < radius or src_center[0] > row - radius or src_center[1] > col - radius)
+            out_of_boundary = true;
+        if (dist_center[0] < radius or dist_center[1] < radius or dist_center[0] > row - radius or dist_center[1] > col - radius)
+            out_of_boundary = true;
+
+		if (out_of_boundary == false)
 		{
-			//(y,x)
-			candidate_mv_a[0] = candidate[index*2];
-			candidate_mv_a[1] = candidate[index*2+1];
+			candidate_sad[index] = get_sad(dsrc, ddist, src_center[1], src_center[0], dist_center[1], dist_center[0] , src_cols);
+			//cout << candidate_sad[index] << "	";
+			//cout << candidate[index*2] << "	" << candidate[index*2+1] <<endl;
+		
+			//get min SAD
+			if (candidate_sad[index] < min_sad)
+			{
+				//(y,x)
+				candidate_mv_a[0] = candidate[index*2];
+				candidate_mv_a[1] = candidate[index*2+1];
+				//cout << "result: " << candidate[index*2] << "	" << candidate[index*2+1] <<endl;
+			}
+		}
+		else
+		{
+			//cout << "out boundary: " << current_rows << "	" << current_cols <<endl;			
+			continue;
 		}
 	}
 
 	//assert value
 	*(motion_Mat + current_rows*block_col*2+current_cols*2+0) = candidate_mv_a[0];
 	*(motion_Mat + current_rows*block_col*2+current_cols*2+1) = candidate_mv_a[1];	
-
-	delete [] cs;
+	
+	if(candidate_mv_a[0] !=0 or candidate_mv_a[1] != 0)
+	{
+		//cout << "result: " << candidate_mv_a[0] << "	" << candidate_mv_a[1] <<endl;
+	}
+		
 }
 
 
@@ -1098,7 +1341,7 @@ void post_processME(uchar *dsrc, uchar *ddist, int *motion_Mat, int src_rows, in
 											 *(motion_Mat + r*block_col*2+(c+1)*2+0),*(motion_Mat + r*block_col*2+(c+1)*2+1),
 											 *(motion_Mat + (r+1)*block_col*2+c*2+0),*(motion_Mat + (r+1)*block_col*2+c*2+1)
 											};				
-					post_processConcer_Line(dsrc, ddist,  motion_Mat, current_motion,src_cols,r,c);
+					post_processConcer_Line(dsrc, ddist,  motion_Mat, current_motion,src_rows,src_cols,r,c);
 				}else if(r==0 and c==block_col-1)
 				{
 					//(y,x)
@@ -1106,7 +1349,7 @@ void post_processME(uchar *dsrc, uchar *ddist, int *motion_Mat, int src_rows, in
 											 *(motion_Mat + r*block_col*2+(c-1)*2+0),*(motion_Mat + r*block_col*2+(c-1)*2+1),
 											 *(motion_Mat + (r+1)*block_col*2+c*2+0),*(motion_Mat + (r+1)*block_col*2+c*2+1)
 											};	
-					post_processConcer_Line(dsrc, ddist,  motion_Mat, current_motion,src_cols,r,c);
+					post_processConcer_Line(dsrc, ddist,  motion_Mat, current_motion,src_rows,src_cols,r,c);
 				}else if(r==block_row-1 and c==0)
 				{
 					//(y,x)
@@ -1114,7 +1357,7 @@ void post_processME(uchar *dsrc, uchar *ddist, int *motion_Mat, int src_rows, in
 											 *(motion_Mat + r*block_col*2+(c+1)*2+0),*(motion_Mat + r*block_col*2+(c+1)*2+1),
 											 *(motion_Mat + (r-1)*block_col*2+c*2+0),*(motion_Mat + (r-1)*block_col*2+c*2+1)
 											};	
-					post_processConcer_Line(dsrc, ddist,  motion_Mat, current_motion,src_cols,r,c);
+					post_processConcer_Line(dsrc, ddist,  motion_Mat, current_motion,src_rows,src_cols,r,c);
 				}else if(r==block_row-1 and c==block_col-1)
 				{
 					//(y,x)
@@ -1122,7 +1365,7 @@ void post_processME(uchar *dsrc, uchar *ddist, int *motion_Mat, int src_rows, in
 											 *(motion_Mat + r*block_col*2+(c-1)*2+0),*(motion_Mat + r*block_col*2+(c-1)*2+1),
 											 *(motion_Mat + (r-1)*block_col*2+c*2+0),*(motion_Mat + (r-1)*block_col*2+c*2+1)
 											};	
-					post_processConcer_Line(dsrc, ddist,  motion_Mat, current_motion,src_cols,r,c);
+					post_processConcer_Line(dsrc, ddist,  motion_Mat, current_motion,src_rows,src_cols,r,c);
 				}
 				else//case 2: four lines
 				{
@@ -1133,20 +1376,21 @@ void post_processME(uchar *dsrc, uchar *ddist, int *motion_Mat, int src_rows, in
 												 *(motion_Mat + r*block_col*2+(c-1)*2+0),*(motion_Mat + r*block_col*2+(c-1)*2+1),
 												 *(motion_Mat + r*block_col*2+(c+1)*2+0),*(motion_Mat + r*block_col*2+(c+1)*2+1)
 												};	
-						post_processConcer_Line(dsrc, ddist,  motion_Mat, current_motion,src_cols,r,c);
+						post_processConcer_Line(dsrc, ddist,  motion_Mat, current_motion,src_rows,src_cols,r,c);
 					}else if(c == 0 or c == block_col-1)	//v: two lines
 					{
 						int current_motion[6] = {*(motion_Mat + r*block_col*2+c*2+0),*(motion_Mat + r*block_col*2+c*2+1),
 												 *(motion_Mat + (r+1)*block_col*2+c*2+0),*(motion_Mat + (r+1)*block_col*2+c*2+1),
 												 *(motion_Mat + (r-1)*block_col*2+c*2+0),*(motion_Mat + (r-1)*block_col*2+c*2+1)
 												};	
-						post_processConcer_Line(dsrc, ddist,  motion_Mat, current_motion,src_cols,r,c);
-					}else	//normal block
-					{
-						//
-						post_processBlock(dsrc, ddist,  motion_Mat, src_cols, r, c);
+						post_processConcer_Line(dsrc, ddist,  motion_Mat, current_motion,src_rows,src_cols,r,c);
 					}
 				}
+			}				
+			else//normal block
+			{
+				//
+				post_processBlock(dsrc, ddist,  motion_Mat, src_rows, src_cols, r, c);
 			}
 
 		
@@ -1157,7 +1401,7 @@ void post_processME(uchar *dsrc, uchar *ddist, int *motion_Mat, int src_rows, in
 
 
 //imread generate a continous matrix
-void tdrs_both(Mat &src, Mat &dist, Mat &src_image, Mat &IF_image, int *last_motion_forward, int *last_motion_backward)
+void tdrs_both(Mat &src, Mat &dist, Mat &src_image, Mat &IF_image, Mat &dist_image,int *last_motion_forward, int *last_motion_backward)
 {
     int block_size(BLOCKSIZE), radius(block_size/2);
     int row(src.rows), col(src.cols);
@@ -1189,9 +1433,10 @@ void tdrs_both(Mat &src, Mat &dist, Mat &src_image, Mat &IF_image, int *last_mot
     plmm_b = new int[size];
     memcpy(plmm_b, last_motion_backward, size*sizeof(int));
 
-	int *pmm_better_sad_f, *pmm_better_sad_b;
+	int *pmm_better_sad_f, *pmm_better_sad_b , *sad_flag_map;
 	pmm_better_sad_f = new int[size];
 	pmm_better_sad_b = new int[size];
+	sad_flag_map = new int[size];
 
     int total_thread = CPU_THREAD;
     thread ts_f[total_thread];
@@ -1222,32 +1467,34 @@ void tdrs_both(Mat &src, Mat &dist, Mat &src_image, Mat &IF_image, int *last_mot
 
 
 	//select the better SAD
-	select_sad(dsrc, ddist, pmm_f, pmm_b, pmm_better_sad_f, row, col);
+	select_sad(dsrc, ddist, pmm_f, pmm_b, pmm_better_sad_f, sad_flag_map ,row, col);
 	
 	//mv mean
 	//MV_without_abnormal(pmm_better_sad_f,row,col);
 
 	//change the value from pmm_better_sad_f to pmm_better_sad_b
-	memcpy(pmm_better_sad_b, pmm_better_sad_f, size*sizeof(int));
-	for (int i = 0; i < size; i++)
-	{
-		*(pmm_better_sad_b+i) = -*(pmm_better_sad_b+i);
-	}
+	//memcpy(pmm_better_sad_b, pmm_better_sad_f, size*sizeof(int));
+	//for (int i = 0; i < size; i++)
+	//{
+	//	*(pmm_better_sad_b+i) = -*(pmm_better_sad_b+i);
+		//cout << *(pmm_f+i) << "	";
+	//}
 	
 
     //update last_motion for next frame
-    memcpy(last_motion_forward, pmm_better_sad_f, size*sizeof(int));
-    memcpy(last_motion_backward, pmm_better_sad_b, size*sizeof(int));
+    memcpy(last_motion_forward, pmm_f, size*sizeof(int));
+    memcpy(last_motion_backward, pmm_b, size*sizeof(int));
 
 	//IF_bothward
-	Mat dist_image = IF_image.clone();
-	general_IF_MC(src_image,IF_image,dist_image,last_motion_forward);
+	general_IF_MC(src_image,IF_image,dist_image,pmm_better_sad_f, sad_flag_map);
+	//general_IF_MC_Forward(src_image,IF_image,dist_image,last_motion_forward);
+	//draw_arrow(src_image, dist_image, IF_image, last_motion_forward);
 
     //free memory
     delete [] pmm_f; delete [] plmm_f; 
     delete [] pmm_b; delete [] plmm_b;
 	delete [] motion_map_forward; delete [] motion_map_backward;
-	delete [] pmm_better_sad_f; delete [] pmm_better_sad_b;
+	delete [] pmm_better_sad_f; delete [] pmm_better_sad_b; delete [] sad_flag_map;
 	delete [] dsrc; delete [] ddist; 
 	
 	
@@ -1262,6 +1509,7 @@ int main(int argc, char**argv)
 	//string file_name = "/home/iqiyi/Desktop/ESPCN_shijie/True-Motion-Estimation/Oigin_SDBronze.mp4";
 	//string file_name = "/home/iqiyi/Desktop/ESPCN_shijie/True-Motion-Estimation/movie/output.mp4";
 	string file_name = "/home/iqiyi/Desktop/ESPCN_shijie/True-Motion-Estimation/movie/FOREMAN_352x288_30_orig_01.avi";
+	//string file_name = "/home/iqiyi/Desktop/ESPCN_shijie/True-Motion-Estimation/movie/CITY_704x576_60_orig_01.avi";
 
     int cnt(0), block_size(BLOCKSIZE);
     VideoCapture cap;
@@ -1308,16 +1556,10 @@ int main(int argc, char**argv)
         cvtColor(src, gsrc, CV_BGR2GRAY);
         cvtColor(dist, gdist, CV_BGR2GRAY);
 
-		//debug
-		//imwrite(boost::str(boost::format("./video/%04d_a.jpg") %cnt).c_str(), src);	
-		//imwrite(boost::str(boost::format("./video/%04d_b.jpg") %cnt).c_str(), dist);
-		//imshow("src",gsrc);
-		//imshow("dist",gdist);
-
 		IF_img = src.clone();
 		//tdrs_MC(gsrc, gdist, out, src, IF_img, motion_map);
 		//bothward: FORWARD and BACKWARD
-		tdrs_both(gsrc, gdist, src, IF_img, motion_map_forward, motion_map_backward);
+		tdrs_both(gsrc, gdist, src, IF_img, out,motion_map_forward, motion_map_backward);
 
 		//frame reflash to the next circle
         src = dist.clone();
@@ -1326,10 +1568,10 @@ int main(int argc, char**argv)
         dtn = end - start;
         avg_dtn = (cnt/float(cnt+1))*avg_dtn + (dtn.count()/float(cnt+1));
         cnt++;
-		//cout << "cnt is " << cnt << endl;
+		cout << "cnt is " << cnt << endl;
 
         string tmp = boost::str(boost::format("%2.2fms / %2.2fms")% dtn.count()  %avg_dtn );
-        putText(out, tmp, cvPoint(30,30), FONT_HERSHEY_COMPLEX_SMALL, 0.8, cvScalar(0,200,0), 1, CV_AA);
+        //putText(out, tmp, cvPoint(30,30), FONT_HERSHEY_COMPLEX_SMALL, 0.8, cvScalar(0,200,0), 1, CV_AA);
 		putText(IF_img, tmp, cvPoint(30,30), FONT_HERSHEY_COMPLEX_SMALL, 0.8, cvScalar(0,200,0), 1, CV_AA);
 
 		//record the video
@@ -1337,8 +1579,8 @@ int main(int argc, char**argv)
         record.write(out);
 
 		//save the image of the output
-		//imwrite(boost::str(boost::format("./video/%04d_a.jpg") %cnt).c_str(), IF_img);
-		//imwrite(boost::str(boost::format("./video/%04d_b.jpg") %cnt).c_str(), out);	
+		//imwrite(boost::str(boost::format("video/%04d_a.jpg") %cnt).c_str(), IF_img);
+		//imwrite(boost::str(boost::format("video/%04d_b.jpg") %cnt).c_str(), out);	
 
         imshow("motion", IF_img);
 		//imshow("motion", out);
