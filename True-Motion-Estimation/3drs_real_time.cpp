@@ -22,7 +22,7 @@ using namespace cv;
 int BLOCKSIZE = 4;
 int CPU_THREAD = 1;
 int DISTANCE_THEROSHOLD = 80;
-int MV_THRESHOLD = 80;
+int MV_THRESHOLD = 80*BLOCKSIZE*BLOCKSIZE;
 int ERROR_VALUE = 65535;
 
 float get_max(float *input, int size)
@@ -45,11 +45,11 @@ int get_sad(uchar *src, uchar *dist, int dx, int dy, int sx, int sy, int col)
     int block_size(BLOCKSIZE);
     sx -= block_size/2; sy -= block_size/2;
     dx -= block_size/2; dy -= block_size/2;
-/*
+
 	//left top point of the block
     uchar *pCur, *pRef, *tmpCur, *tmpRef;
-    pCur = (dist + dx*col + dy);
-    pRef = (src + sx*col + sy);
+    pCur = (dist + dy*col + dx);
+    pRef = (src + sy*col + sx);
 
 	int sum_sad(0);
 	for (int a = 0; a < block_size; a++)
@@ -60,12 +60,14 @@ int get_sad(uchar *src, uchar *dist, int dx, int dy, int sx, int sy, int col)
 			tmpRef = pRef + a*col+b;
 			sum_sad += fabs(*tmpCur - *tmpRef);
 		}
+	
 	}
-	//cout << ":" << sum_sad << endl;
+	if (sum_sad > 1000)
+		//cout << ":" << sum_sad << endl;
 	return sum_sad;
-*/
 
 
+/*
     __m128i s0, s1, s2;
     s2 = _mm_setzero_si128();
 
@@ -84,8 +86,10 @@ int get_sad(uchar *src, uchar *dist, int dx, int dy, int sx, int sy, int col)
         pCur += col;
         pRef += col;
     }
+	if (sad_test > 1000)
+		cout << ":" << sad_test << endl;
     return sad_test;
-
+*/
 }
 
 inline float norm(int *point)
@@ -227,7 +231,7 @@ void cal_block_score(int ** array_map, int candidate)
 void MV_without_abnormal(int *pmm, int src_rows, int src_cols)
 {
     int block_size(BLOCKSIZE);
-    int searching_area(block_size*block_size), radius(block_size/2);
+    int searching_area(block_size), radius(block_size/2);
     int block_row(src_rows/block_size), block_col(src_cols/block_size);
 
 	for (int r = 0; r < block_row; r++)
@@ -355,7 +359,7 @@ void MV_without_abnormal(int *pmm, int src_rows, int src_cols)
 void tdrs_thread(uchar *dsrc, uchar *ddist, int *plmm, int *pmm, int src_rows, int src_cols, int cur_thread, int num_thread)
 {
     int block_size(BLOCKSIZE);
-    int searching_area(block_size*block_size), radius(block_size/2);
+    int searching_area(2*block_size), radius(block_size/2);
     int block_row(src_rows/block_size), block_col(src_cols/block_size);
 
  	//cout << "thread num is " << cur_thread << " working" << endl;
@@ -387,11 +391,11 @@ void tdrs_thread(uchar *dsrc, uchar *ddist, int *plmm, int *pmm, int src_rows, i
             else
             {
                 //magic number from paper
-                int p(8);
-                int updates[16] = {0,4, 0,-4, 2,0, -2,0, -1,1 ,1,-1, 2,5, -2,-5};
+                int p(9);
+                //int updates[18] = {0,0, 1,0, -1,0, 2,0, -2,0 ,0,1, 0,-1, 0,-3, 0,3 };
+				int updates[18] = {0,4, 0,-4, 2,0, -2,0, -1,1 ,1,-1, 2,5, -2,-5, 0,0 };
 
                 //initial estimation is early cauculated value
-				//fix big bug!!!
                 int Da_current[2] = { *(pmm+((r-1)*block_col*2 + (c-1)*2 + 0)), *(pmm + ( (r-1)*block_col*2 + (c-1)*2 + 1))}; //motion_map[r-1][c-1]	//Sa
                 int Db_current[2] = { *(pmm+((r-1)*block_col*2 + (c+1)*2 + 0)), *(pmm + ( (r-1)*block_col*2 + (c+1)*2 + 1))}; //motion_map[r-1][c+1]	//Sb
 
@@ -413,127 +417,68 @@ void tdrs_thread(uchar *dsrc, uchar *ddist, int *plmm, int *pmm, int src_rows, i
                 float SAD_a(100000.), SAD_b(100000.);
                 int not_update_a(0), not_update_b(0);
 
-/*
-				int candidate[26] = {0};
-				float candidate_sad[13] = {0};
-				bool candidate_index[13] = {0};
-
-				//inital 13 candidate set
-                int cs[26] = {Da_current[0], Da_current[1],
-								Db_current[0], Db_current[1],
-                                Da_current[0] + updates[0],  Da_current[1] + updates[1],
-                                Da_current[0] + updates[2],  Da_current[1] + updates[3],
-                                Da_current[0] + updates[4],  Da_current[1] + updates[5],
-                                Da_current[0] + updates[6],  Da_current[1] + updates[7],
-                                Da_current[0] + updates[8],  Da_current[1] + updates[9],
-                                Da_current[0] + updates[10], Da_current[1] + updates[11],
-                                Da_current[0] + updates[12], Da_current[1] + updates[13],
-                                Da_current[0] + updates[14], Da_current[1] + updates[15],
-                                Da_previous[0], Da_previous[1],
-								Db_previous[0], Db_previous[1],
-                                0,0};
-
-				//get SAD from each candidate, there are 13 candidate each time
-                for (int index = 0; index < 13; index++)
-                {
-                    bool out_of_boundary(false);
-                    int eval_center[2] = {center[0] - cs[index*2],  center[1] - cs[index*2 + 1]}; //???? - or +
-                    if (eval_center[0] < radius or eval_center[1] < radius or eval_center[0] > src_cols - radius or eval_center[1] > src_rows - radius)
-                        out_of_boundary = true;
-                    if (out_of_boundary)
-                        continue;
-
-                    if (not out_of_boundary)
-                    {
-                        candidate[index*2] = cs[index*2];
-                        candidate[index*2 + 1] = cs[index*2 + 1];
-                        candidate_sad[index] = get_sad(dsrc, ddist, center[0], center[1], eval_center[0], eval_center[1] , src_cols);
-                        candidate_index[index] = 1;
-                    }
-
-                }
-
-				//motion vector(0,0) been penalty
-				if(candidate_sad[12] <= 45)
-				{
-					candidate_sad[12] = candidate_sad[12] * 0.9;
-				}else
-				{
-					candidate_sad[12] = candidate_sad[12] * 1.1;
-				}
-
-				//get the min SAD
-				float min_sad(100000.);
-				int tmp_update[2] = {0};
-				for (int i = 0; i < 13; i++)
-				{
-		            if (!candidate_index[i])
-		                continue;
-
-                    if (candidate_sad[i] <= min_sad )
-                    {
-                        min_sad = candidate_sad[i];
-                        tmp_update[0] = candidate[i*2];
-                        tmp_update[1] = candidate[i*2+1];
-                    }	
-					
-				}
-				//cout << tmp_update[0] << " " << tmp_update[1]<< endl;
-				//cout << endl;
-
-				//assert value
-		        *(pmm + (r*block_col*2 + c*2)) = tmp_update[0];
-		        *(pmm + (r*block_col*2 + c*2 + 1)) = tmp_update[1]; 
-*/				
-
                 while (true)
                 {
-                    int candidate_a[10] = {0};        
-                    float candidate_sad_a[5] = {0}; 
-                    bool candidate_index_a[5] = {0};
+                    int candidate_a[8] = {0};        int candidate_b[8] = {0};
+                    float candidate_sad_a[4] = {0};  float candidate_sad_b[4] = {0};
+                    bool candidate_index_a[4] = {0};  bool candidate_index_b[4] = {0};
 
                     int update_a[2] = {updates[(block_cnt_a %p)*2], updates[(block_cnt_a %p)*2 + 1]};
-                    block_cnt_a++;
+                    int update_b[2] = {updates[(block_cnt_b %p)*2], updates[(block_cnt_b %p)*2 + 1]};
+					//printf("%d,block_cnt %% p = %d\n",block_cnt_a,(block_cnt_a %p)*2);
+                    block_cnt_a++; block_cnt_b++;
 
                     //inital candidate set, 1st : ACS, 2nd : CAs, 3th : 0
-                    int cs_a[10] = {Da_current[0], Da_current[1],
-								   Db_current[0], Db_current[1],
+                    int cs_a[8] = {Da_current[0], Da_current[1],
                                    Da_current[0] + update_a[0], Da_current[1] + update_a[1],
                                    Da_previous[0], Da_previous[1],
                                    0,0};
+                    int cs_b[8] = {Db_current[0], Db_current[1],
+                                   Db_current[0] + update_b[0], Db_current[1] + update_b[1],
+                                   Db_previous[0], Db_previous[1],
+                                   0,0};
 
                     //get SAD from each candidate, there are 4 candidate each time
-                    for (int index = 0; index < 5; index++)
+                    for (int index = 0; index < 4; index++)
                     {
-                        bool out_of_boundary_a(false);
-						//both ward
-                        int eval_center[2] = {center[0] - cs_a[index*2],  center[1] - cs_a[index*2+1]};
-						
+                        bool out_of_boundary_a(false), out_of_boundary_b(false);
+                        int eval_center_a[2] = {center[0] - cs_a[index*2],  center[1] - cs_a[index*2 + 1]};
+                        int eval_center_b[2] = {center[0] - cs_b[index*2],  center[1] - cs_b[index*2 + 1]};
 
-                        if (eval_center[0] < radius or eval_center[1] < radius or eval_center[0] > src_cols - radius or eval_center[1] > src_rows - radius)
+                        if (eval_center_a[0] < radius or eval_center_a[1] < radius or eval_center_a[0] >= src_cols - radius or eval_center_a[1] >= src_rows - radius)
                             out_of_boundary_a = true;
-                        if (out_of_boundary_a)
+                        if (eval_center_b[0] < radius or eval_center_b[1] < radius or eval_center_b[0] >= src_cols - radius or eval_center_b[1] >= src_rows - radius)
+                            out_of_boundary_b = true;
+                        if (out_of_boundary_a and out_of_boundary_b)
                             continue;
 
                         if (not out_of_boundary_a)
                         {
                             candidate_a[index*2] = cs_a[index*2];
                             candidate_a[index*2 + 1] = cs_a[index*2 + 1];
-                            candidate_sad_a[index] = get_sad(dsrc, ddist, center[0], center[1], eval_center[0], eval_center[1] , src_cols);
-							//cout << candidate_sad_a[index] << "	";
+                            candidate_sad_a[index] = get_sad(dsrc, ddist, center[0], center[1], eval_center_a[0], eval_center_a[1] , src_cols);
                             candidate_index_a[index] = 1;
                         }
 
+                        if (not out_of_boundary_b)
+                        {
+                            candidate_b[index*2] = cs_b[index*2];
+                            candidate_b[index*2 + 1] = cs_b[index*2 + 1];
+                            candidate_sad_b[index] = get_sad(dsrc, ddist, center[0], center[1], eval_center_b[0], eval_center_b[1] , src_cols);
+                            candidate_index_b[index] = 1;
+                        }
                     }
-					//cout << endl;
-                    //compute penalty from each candidate
-                    float min_sad_a(100000.);
-                    int tmp_update_a[2] = {0};
 
-                    float max_sad_a = get_max(candidate_sad_a, 5);
+                    //compute penalty from each candidate
+                    float min_sad_a(100000.), min_sad_b(100000.);
+                    int tmp_update_a[2] = {0};
+                    int tmp_update_b[2] = {0};
+
+                    float max_sad_a = get_max(candidate_sad_a, 4);
+                    float max_sad_b = get_max(candidate_sad_b, 4);
 
                     //compute estimator a
-                    for (int i = 0; i < 5; i++)
+                    for (int i = 0; i < 4; i++)
                     {
                         if (!candidate_index_a[i])
                             continue;
@@ -545,21 +490,18 @@ void tdrs_thread(uchar *dsrc, uchar *ddist, int *plmm, int *pmm, int src_rows, i
                                 penalty = 0.;
                                 break;
                             case 1:
-                                penalty = 0.;
-                                break;
-                            case 2:
                                 penalty = 0.004 * max_sad_a * norm(update_a);
                                 break;
-                            case 3:
+                            case 2:
                                 penalty = 0.008 * max_sad_a;
                                 break;
-                            case 4:
+                            case 3:
                                 penalty = 0.016 * max_sad_a;
                                 break;
                         }
 
                         current_sad += penalty;
-                        if (current_sad < min_sad_a)
+                        if (min_sad_a > current_sad)
                         {
                             min_sad_a = current_sad;
                             tmp_update_a[0] = candidate_a[i*2];
@@ -570,6 +512,43 @@ void tdrs_thread(uchar *dsrc, uchar *ddist, int *plmm, int *pmm, int src_rows, i
                         {
                             tmp_update_a[0] = 0;
                             tmp_update_a[1] = 0;
+                        }
+                    }
+
+                    //compute estimator b
+                    for (int i = 0; i < 4; i++)
+                    {
+                        if (!candidate_index_b[i])
+                            continue;
+                        float current_sad = candidate_sad_b[i];
+                        float penalty(0);
+                        switch (i)
+                        {
+                            case 0:
+                                penalty = 0.;
+                                break;
+                            case 1:
+                                penalty = 0.004 * max_sad_b * norm(update_b);
+                                break;
+                            case 2:
+                                penalty = 0.008 * max_sad_b;
+                                break;
+                            case 3:
+                                penalty = 0.016 * max_sad_b;
+                                break;
+                        }
+                        current_sad += penalty;
+                        if (min_sad_b > current_sad)
+                        {
+                            min_sad_b = current_sad;
+                            tmp_update_b[0] = candidate_b[i*2];
+                            tmp_update_b[1] = candidate_b[i*2+1];
+                        }
+                        //prefer 0 in the case of same SAD
+                        else if (min_sad_b + 40.  > current_sad and candidate_b[i*2] == 0 and candidate_b[i*2+1] == 0)
+                        {
+                            tmp_update_b[0] = 0;
+                            tmp_update_b[1] = 0;
                         }
                     }
 
@@ -584,29 +563,62 @@ void tdrs_thread(uchar *dsrc, uchar *ddist, int *plmm, int *pmm, int src_rows, i
                     else
                         not_update_a += 1;
 
+                    if (min_sad_b < SAD_b)
+                    {
+                        SAD_b = min_sad_b;
+                        Db_current[0] = tmp_update_b[0];
+                        Db_current[1] = tmp_update_b[1];
+                        not_update_b = 0;
+                    }
+                    else
+                        not_update_b += 1;
+
+                    //from paper p373, imporve 2nd withdraw
+                    float threshold = 5;
+                    if (SAD_a > SAD_b + threshold)
+                    {
+                        SAD_a = SAD_b;
+                        Da_current[0] = Db_current[0];
+                        Da_current[1] = Db_current[1];
+                        not_update_a = 0;
+                    }
+                    if (SAD_b > SAD_a + threshold)
+                    {
+                        SAD_b = SAD_a;
+                        Db_current[0] = Da_current[0];
+                        Db_current[1] = Da_current[1];
+                        not_update_b = 0;
+                    }
+
                     //break if any estiminator converge
-                    int check_converge = 8;
-                    if (not_update_a > check_converge)
+                    int check_converge = 2;
+                    if (not_update_a > check_converge or not_update_b > check_converge)
                     {
                         break;
                     }
                     //break if out of searching area
-                    if (abs(Da_current[0]) > searching_area or abs(Da_current[1]) > searching_area )
+                    if (abs(Da_current[0]) > searching_area or abs(Da_current[1]) > searching_area or abs(Db_current[0]) > searching_area or abs(Db_current[1]) > searching_area)
                     {
                         break;
                     }
                 }
 
-
-                *(pmm + (r*block_col*2 + c*2)) = Da_current[0];
-                *(pmm + (r*block_col*2 + c*2 + 1)) = Da_current[1]; //motion_map[r][c] = Da_current
-
-				//if( Da_current[0] > 10 or  Da_current[1] >10)
-					//cout << Da_current[0] << "	"<< Da_current[1] << endl;
+                if (SAD_a <= SAD_b)
+                {
+                    *(pmm + (r*block_col*2 + c*2)) = Da_current[0];
+                    *(pmm + (r*block_col*2 + c*2 + 1)) = Da_current[1]; //motion_map[r][c] = Da_current
+                }
+                else
+                {
+                    *(pmm + (r*block_col*2 + c*2)) = Db_current[0];
+                    *(pmm + (r*block_col*2 + c*2 + 1)) = Db_current[1]; //motion_map[r][c] = Db_current
+                }
             }
+
 
         }
     }
+	
 }
 
 
@@ -624,7 +636,7 @@ void draw_arrow(Mat &src, Mat &dist, Mat &draw, int *last_motion)
         {
             if ( *(last_motion + r*block_col*2 + c*2) != 0 or *(last_motion + r*block_col*2 + c*2 + 1) != 0)
             {
-                Point motion(*(last_motion + r*block_col*2 + c*2) , *(last_motion + r*block_col*2 + c*2+1 ));
+                Point motion(*(last_motion + r*block_col*2 + c*2) , *(last_motion + r*block_col*2 + c*2+1));
                 Point center(c*block_size + radius, r*block_size + radius);
                 Point from = center - motion;
                 arrowedLine(draw, from, center, Scalar(0,255,0));
@@ -633,211 +645,6 @@ void draw_arrow(Mat &src, Mat &dist, Mat &draw, int *last_motion)
     }
 
 }
-
-
-//imread generate a continous matrix
-/*
-void tdrs(Mat &src, Mat &dist, Mat &draw, int *last_motion)
-{
-    int block_size(BLOCKSIZE), radius(block_size/2);
-    int row(src.rows), col(src.cols);
-    int block_row(row/block_size), block_col(col/block_size);
-
-    int img_size = row * col;
-    uchar *dsrc, *ddist;
-    dsrc = new uchar[img_size];
-    memcpy(dsrc, src.data, img_size*sizeof(uchar));
-    ddist = new uchar[img_size];
-    memcpy(ddist, dist.data, img_size*sizeof(uchar));
-
-
-    //initial zero motion map
-    int size = block_row * block_col * 2;
-    int *motion_map = new int[size]();
-
-    int *pmm, *plmm;
-    pmm = new int[size];
-    memcpy(pmm, motion_map, size*sizeof(int));
-    plmm = new int[size];
-    memcpy(plmm, last_motion, size*sizeof(int));
-
-    int total_thread = 1;
-    thread ts[total_thread];
-    for (int i = 0; i < total_thread; i++)
-        ts[i] = thread(tdrs_thread, dsrc, ddist, plmm, pmm, src.rows, src.cols, i, total_thread);
-    for (int i = 0; i < total_thread; i++)
-        ts[i].join();
-
-    //update last_motion for next frame
-    memcpy(last_motion, pmm, size*sizeof(int));
-
-    //free memory
-    delete [] pmm; delete [] plmm; delete [] dsrc; delete [] ddist; delete [] motion_map;
-
-	//draw the arrowed line
-    for (int r = 0; r < block_row; r++)
-    {
-        for (int c = 0; c < block_col; c++)
-        {
-            if ( *(last_motion + r*block_col*2 + c*2) != 0 or *(last_motion + r*block_col*2 + c*2 + 1) != 0)
-            {
-                Point motion(*(last_motion + r*block_col*2 + c*2) , *(last_motion + r*block_col*2 + c*2 + 1));
-				//printf("%d,%d\n",motion.x,motion.y);
-                Point center(c*block_size + radius, r*block_size + radius);
-				//printf("%d,%d\n",center.x,center.y);
-                Point from = center - motion;
-                arrowedLine(draw, from, center, Scalar(0,255,0));
-            }
-        }
-    }
-	
-} 
-
-*/
-
-//imread generate a continous matrix
-void tdrs_MC(Mat &src, Mat &dist, Mat &draw, Mat &src_image, Mat &IF_image,int *last_motion)
-{
-/*
-    int block_size(BLOCKSIZE), radius(block_size/2);
-    int row(src.rows), col(src.cols);
-    int block_row(row/block_size), block_col(col/block_size);
-    int img_size = row * col;
-
-    uchar *dsrc, *ddist;
-    dsrc = new uchar[img_size];
-    memcpy(dsrc, src.data, img_size*sizeof(uchar));
-    ddist = new uchar[img_size];
-    memcpy(ddist, dist.data, img_size*sizeof(uchar));
-
-
-    //initial zero motion map
-    int size = block_row * block_col * 2;
-    int *motion_map = new int[size]();
-
-    int *pmm, *plmm;
-    pmm = new int[size];
-    memcpy(pmm, motion_map, size*sizeof(int));
-    plmm = new int[size];
-    memcpy(plmm, last_motion, size*sizeof(int));
-
-    int total_thread = 1;
-    thread ts[total_thread];
-    for (int i = 0; i < total_thread; i++)
-        ts[i] = thread(tdrs_thread, dsrc, ddist, plmm, pmm, src.rows, src.cols, i, total_thread);
-    for (int i = 0; i < total_thread; i++)
-        ts[i].join();
-
-	//motion vector excluding outliers
-	MV_without_abnormal(pmm,row,col);
-
-    //update last_motion for next frame
-    memcpy(last_motion, pmm, size*sizeof(int));
-
-    //free memory
-    delete [] pmm; delete [] plmm; delete [] dsrc; delete [] ddist; delete [] motion_map;
-
-	//draw the arrowed line
-
-    for (int r = 0; r < block_row; r++)
-    {
-        for (int c = 0; c < block_col; c++)
-        {
-            if ( *(last_motion + r*block_col*2 + c*2) != 0 or *(last_motion + r*block_col*2 + c*2 + 1) != 0)
-            {
-                Point motion(*(last_motion + r*block_col*2 + c*2) , *(last_motion + r*block_col*2 + c*2 + 1));
-				//printf("%d,%d\n",motion.x,motion.y);
-                Point center(c*block_size + radius, r*block_size + radius);
-				//printf("%d,%d\n",center.x,center.y);
-                Point from = center - motion;
-                arrowedLine(draw, from, center, Scalar(0,255,0));
-            }
-        }
-    }
-	
-	
-	//Forward MC
-	for (int r = 0; r< block_row; r++)
-	{
-		for (int c = 0; c< block_col;c++)
-		{
-			if (*(last_motion + r*block_col*2 + c*2) != 0 or *(last_motion + r*block_col*2 + c*2 + 1) != 0)	
-			{
-				//fix this bug!!!! last_motion --> (y,x)
-				Point motion(*(last_motion + r*block_col*2 + c*2+1) , *(last_motion + r*block_col*2 + c*2));
-				motion.x = int(motion.x*0.5);
-				motion.y = int(motion.y*0.5);
-				//cout << "motion.x/y is " << motion << endl;
-				for (int a = 0; a< block_size; a++)
-				{
-					for (int b = 0; b < block_size; b++)
-					{
-						Point loc_dist(r*block_size+a+motion.x,c*block_size+b+motion.y);
-						if ((loc_dist.x <0) or (loc_dist.x > row-1) or (loc_dist.y <0 ) or (loc_dist.y > col-1))
-						{
-							//cout << "out of the edge, x is " << loc_dist.x << "and y is " << loc_dist.y << endl;
-							continue;
-						}
-						else
-						{
-							Vec3b src_pix = src_image.at<Vec3b>(r*block_size+a,c*block_size+b);
-							//cout << src_pix << endl;
-							IF_image.at<Vec3b>(r*block_size+a+motion.x,c*block_size+b+motion.y) = src_pix;
-							//cout << IF_image.at<Vec3b>(block_row*block_size+a+motion.x,block_col*block_size+b+motion.y) << endl;
-						}
- 
-					}
-				}
-			}	
-		}
-	}
-	
-
-	Mat next_img = IF_image.clone();
-	//Both ward
-	for (int r = 0; r< block_row; r++)
-	{
-		for (int c = 0; c< block_col;c++)
-		{
-			if (*(last_motion + r*block_col*2 + c*2) != 0 or *(last_motion + r*block_col*2 + c*2 + 1) != 0)	
-			{
-				//fix this bug!!!! last_motion --> (y,x)
-				Point motion(*(last_motion + r*block_col*2 + c*2+1) , *(last_motion + r*block_col*2 + c*2));
-				motion.x = int(motion.x*0.5);
-				motion.y = int(motion.y*0.5);
-				//cout << "motion.x/y is " << motion << endl;
-				for (int a = 0; a< block_size; a++)
-				{
-					for (int b = 0; b < block_size; b++)
-					{
-						Point loc_dist_prev(r*block_size+a-motion.x,c*block_size+b-motion.y);
-						Point loc_dist_next(r*block_size+a+motion.x,c*block_size+b+motion.y);
-						if ((loc_dist_prev.x <0) or (loc_dist_prev.x > row-1) or (loc_dist_prev.y <0 ) or (loc_dist_prev.y > col-1) or (loc_dist_next.x <0) or (loc_dist_next.x > row-1) or (loc_dist_next.y <0 ) or (loc_dist_next.y > col-1))
-						{
-							//cout << loc_dist_prev.x << " " << loc_dist_prev.y << " ; " << loc_dist_next.x << " " << loc_dist_next.y << " ; " << endl;
-							continue;
-						}
-						else
-						{
-							Vec3b src_pix = src_image.at<Vec3b>(r*block_size+a-motion.x,c*block_size+b-motion.y);
-							Vec3b dist_pix = next_img.at<Vec3b>(r*block_size+a+motion.x,c*block_size+b+motion.y);
-							for (int i = 0;i <3 ;i++)
-							{
-								IF_image.at<Vec3b>(r*block_size+a,c*block_size+b)[i] = int(0.5*(src_pix[i]+dist_pix[i]));			
-							}
-							//cout << src_pix << endl;
-							//cout << IF_image.at<Vec3b>(block_row*block_size+a+motion.x,block_col*block_size+b+motion.y) << endl;
-						}
- 
-					}
-				}
-			}	
-		}
-	}
-*/
-} 
-
-
 
 
 //imread generate a continous matrix
@@ -864,7 +671,7 @@ void general_IF_MC_Forward(Mat &src_image, Mat &IF_image, Mat &dist_image, int *
 					for (int b = 0; b < block_size; b++)
 					{
 						Point loc_dist(r*block_size+a+motion.x,c*block_size+b+motion.y);
-						if ((loc_dist.x <0) or (loc_dist.x > row-1) or (loc_dist.y <0 ) or (loc_dist.y > col-1))
+						if ((loc_dist.x <0) or (loc_dist.x >= row) or (loc_dist.y <0 ) or (loc_dist.y >= col))
 						{
 							//cout << "out of the edge, x is " << loc_dist.x << "and y is " << loc_dist.y << endl;
 							continue;
@@ -889,6 +696,114 @@ void general_IF_MC_Forward(Mat &src_image, Mat &IF_image, Mat &dist_image, int *
 
 
 
+//imread generate a continous matrix
+void general_IF_MC_self(Mat &src_image, Mat &IF_image, Mat &dist_image, int *forward_motion, int *backward_motion, int *flag_map)
+{
+    int block_size(BLOCKSIZE), radius(block_size/2);
+    int row(src_image.rows), col(src_image.cols);
+    int block_row(row/block_size), block_col(col/block_size);
+	int num=0;
+
+	//Both ward
+	for (int r = 0; r< block_row; r++)
+	{
+		for (int c = 0; c< block_col;c++)
+		{
+			//fix this bug!!!! last_motion --> (y,x)
+			Point motion;
+
+			//out of the MVthold range --> use the bicubic			
+			if(*(flag_map + r*block_col*2 + c*2+0) == 1)
+			{
+				motion.x = 0;
+				motion.y = 0;
+				//num += 1;
+				for (int a = 0; a< block_size; a++)
+				{
+					for (int b = 0; b< block_size; b++)
+					{
+						Vec3b src_pix = src_image.at<Vec3b>(r*block_size+a,c*block_size+b);
+						Vec3b dist_pix = dist_image.at<Vec3b>(r*block_size+a,c*block_size+b);
+						for (int i = 0;i <3 ;i++)
+						{
+							IF_image.at<Vec3b>(r*block_size+a,c*block_size+b)[i] = int(0.5*(src_pix[i]+dist_pix[i]));			
+						}
+					}
+				}
+			}
+			else if(*(flag_map + r*block_col*2 + c*2+1) == 0)	//forward motion is better
+			{
+				motion.x = int(*(forward_motion+r*block_col*2+c*2+1)*0.5);
+				motion.y = int(*(forward_motion+r*block_col*2+c*2+0)*0.5);
+
+				for (int a = 0; a< block_size; a++)
+				{
+					for (int b = 0; b < block_size; b++)
+					{
+						Point loc_dist_prev(r*block_size+a-motion.x,c*block_size+b-motion.y);
+						Point loc_dist_next(r*block_size+a+motion.x,c*block_size+b+motion.y);
+
+						if ((loc_dist_prev.x <0) or (loc_dist_prev.x >= row) or (loc_dist_prev.y <0 ) or (loc_dist_prev.y >= col) or (loc_dist_next.x <0) or (loc_dist_next.x >= row) or (loc_dist_next.y <0 ) or (loc_dist_next.y >= col))
+						{
+							Vec3b src_pix = src_image.at<Vec3b>(r*block_size+a,c*block_size+b);
+							Vec3b dist_pix = dist_image.at<Vec3b>(r*block_size+a,c*block_size+b);
+							for (int i = 0;i <3 ;i++)
+							{	
+								IF_image.at<Vec3b>(r*block_size+a,c*block_size+b)[i] = int(0.5*(src_pix[i]+dist_pix[i]));			
+							}
+						}
+						else
+						{
+							Vec3b src_pix = src_image.at<Vec3b>(r*block_size+a-motion.x,c*block_size+b-motion.y);
+							Vec3b dist_pix = dist_image.at<Vec3b>(r*block_size+a+motion.x,c*block_size+b+motion.y);
+							for (int i = 0;i <3 ;i++)
+							{
+								IF_image.at<Vec3b>(r*block_size+a,c*block_size+b)[i] = int(0.5*(src_pix[i]+dist_pix[i]));			
+							}
+						}
+
+					}
+				}
+
+			}else if(*(flag_map + r*block_col*2 + c*2+1) == 1)//backward motion is better
+			{
+				motion.x = int(*(backward_motion+r*block_col*2+c*2+1)*0.5);
+				motion.y = int(*(backward_motion+r*block_col*2+c*2+0)*0.5);
+
+				for (int a = 0; a< block_size; a++)
+				{
+					for (int b = 0; b < block_size; b++)
+					{
+						Point loc_dist_prev(r*block_size+a-motion.x,c*block_size+b-motion.y);
+						Point loc_dist_next(r*block_size+a+motion.x,c*block_size+b+motion.y);
+						if ((loc_dist_prev.x <0) or (loc_dist_prev.x >= row) or (loc_dist_prev.y <0 ) or (loc_dist_prev.y >= col) or (loc_dist_next.x <0) or (loc_dist_next.x >= row) or (loc_dist_next.y <0 ) or (loc_dist_next.y >= col))
+						{
+							Vec3b src_pix = dist_image.at<Vec3b>(r*block_size+a,c*block_size+b);
+							Vec3b dist_pix = src_image.at<Vec3b>(r*block_size+a,c*block_size+b);
+							for (int i = 0;i <3 ;i++)
+							{
+								IF_image.at<Vec3b>(r*block_size+a,c*block_size+b)[i] = int(0.5*(src_pix[i]+dist_pix[i]));			
+							}
+						}
+						else
+						{					
+							Vec3b src_pix = dist_image.at<Vec3b>(r*block_size+a-motion.x,c*block_size+b-motion.y);
+							Vec3b dist_pix = src_image.at<Vec3b>(r*block_size+a+motion.x,c*block_size+b+motion.y);
+							for (int i = 0;i <3 ;i++)
+							{
+								IF_image.at<Vec3b>(r*block_size+a,c*block_size+b)[i] = int(0.5*(src_pix[i]+dist_pix[i]));			
+							}
+						}
+
+					}
+				}
+			}				
+		}
+	}
+
+	//debug 
+	//cout << num*100/6336 << endl;
+}
 
 
 //imread generate a continous matrix
@@ -931,7 +846,7 @@ void general_IF_MC(Mat &src_image, Mat &IF_image, Mat &dist_image, int *last_mot
 					{
 						Point loc_dist_prev(r*block_size+a-motion.x,c*block_size+b-motion.y);
 						Point loc_dist_next(r*block_size+a+motion.x,c*block_size+b+motion.y);
-						if ((loc_dist_prev.x <0) or (loc_dist_prev.x > row-1) or (loc_dist_prev.y <0 ) or (loc_dist_prev.y > col-1) or (loc_dist_next.x <0) or (loc_dist_next.x > row-1) or (loc_dist_next.y <0 ) or (loc_dist_next.y > col-1))
+						if ((loc_dist_prev.x <0) or (loc_dist_prev.x >= row) or (loc_dist_prev.y <0 ) or (loc_dist_prev.y >= col) or (loc_dist_next.x <0) or (loc_dist_next.x >= row) or (loc_dist_next.y <0 ) or (loc_dist_next.y >= col))
 						{
 							Vec3b src_pix = src_image.at<Vec3b>(r*block_size+a,c*block_size+b);
 							Vec3b dist_pix = dist_image.at<Vec3b>(r*block_size+a,c*block_size+b);
@@ -957,7 +872,7 @@ void general_IF_MC(Mat &src_image, Mat &IF_image, Mat &dist_image, int *last_mot
 	}
 
 	//debug 
-	cout << num << endl;
+	//cout << num << endl;
 }
 
 
@@ -983,6 +898,9 @@ void select_sad(uchar *src, uchar *dist, int *current_motion_forward, int *curre
 				*(sad_motion_map + r*block_col*2 + c*2) = val_forward[0];
 				*(sad_motion_map + r*block_col*2 + c*2+1) = val_forward[1];
 
+				//flag map
+				*(sad_flag_map + r*block_col*2 + c*2) = 0;
+				*(sad_flag_map + r*block_col*2 + c*2 +1) = 0;
 			}
 			else
 			{
@@ -997,9 +915,9 @@ void select_sad(uchar *src, uchar *dist, int *current_motion_forward, int *curre
 					int dist_center[2] = {r*block_size+radius+int(val_forward[1]*0.5), c*block_size+radius+int(val_forward[0]*0.5)};
 
                     bool out_of_boundary(false);
-                    if (src_center[0] < radius or src_center[1] < radius or src_center[0] > row - radius or src_center[1] > col - radius)
+                    if (src_center[0] < radius or src_center[1] < radius or src_center[0] >= row - radius or src_center[1] >= col - radius)
                         out_of_boundary = true;
-                    if (dist_center[0] < radius or dist_center[1] < radius or dist_center[0] > row - radius or dist_center[1] > col - radius)
+                    if (dist_center[0] < radius or dist_center[1] < radius or dist_center[0] >= row - radius or dist_center[1] >= col - radius)
                         out_of_boundary = true;
 
 					if (out_of_boundary == false)
@@ -1021,9 +939,9 @@ void select_sad(uchar *src, uchar *dist, int *current_motion_forward, int *curre
 					int dist_center[2] = {r*block_size+radius+int(val_backward[1]*0.5), c*block_size+radius+int(val_backward[0]*0.5)};
 
                     bool out_of_boundary(false);
-                    if (src_center[0] < radius or src_center[1] < radius or src_center[0] > row - radius or src_center[1] > col - radius)
+                    if (src_center[0] < radius or src_center[1] < radius or src_center[0] >= row - radius or src_center[1] >= col - radius)
                         out_of_boundary = true;
-                    if (dist_center[0] < radius or dist_center[1] < radius or dist_center[0] > row - radius or dist_center[1] > col - radius)
+                    if (dist_center[0] < radius or dist_center[1] < radius or dist_center[0] >= row - radius or dist_center[1] >= col - radius)
                         out_of_boundary = true;
 
 					if (out_of_boundary == false)
@@ -1047,14 +965,17 @@ void select_sad(uchar *src, uchar *dist, int *current_motion_forward, int *curre
 
 					if(forward_sad > MV_THRESHOLD)
 					{
+						//out of the range of the SAD flag --> 0 bit
 						*(sad_flag_map + r*block_col*2 + c*2) = 1;
-						*(sad_flag_map + r*block_col*2 + c*2+1) = 1;
 					}
 					else
 					{
 						*(sad_flag_map + r*block_col*2 + c*2) = 0;
-						*(sad_flag_map + r*block_col*2 + c*2+1) = 0;
 					}
+
+					//which direction is better flag --> 1 bit
+					// 0 --> forward
+					*(sad_flag_map + r*block_col*2 + c*2 + 1) = 0;
 				}
 				else if((backward_sad <= forward_sad) )
 				{
@@ -1064,13 +985,15 @@ void select_sad(uchar *src, uchar *dist, int *current_motion_forward, int *curre
 					if(backward_sad > MV_THRESHOLD)	
 					{
 						*(sad_flag_map + r*block_col*2 + c*2) = 1;
-						*(sad_flag_map + r*block_col*2 + c*2+1) = 1;
 					}
 					else
 					{
 						*(sad_flag_map + r*block_col*2 + c*2) = 0;
-						*(sad_flag_map + r*block_col*2 + c*2+1) = 0;
 					}
+
+					//which direction is better flag --> 1 bit
+					// 1 --> backward
+					*(sad_flag_map + r*block_col*2 + c*2 + 1) = 1;
 				}
 
 			}
@@ -1105,9 +1028,9 @@ void post_processConcer_Line(uchar *dsrc, uchar *ddist, int *motion_Mat ,int *mo
 		int dist_center[2] = {current_rows*block_size+radius+int(candidate[1]*0.5), current_cols*block_size+radius+int(candidate[0]*0.5)};
 
         bool out_of_boundary(false);
-        if (src_center[0] < radius or src_center[1] < radius or src_center[0] > row - radius or src_center[1] > col - radius)
+        if (src_center[0] < radius or src_center[1] < radius or src_center[0] >= row - radius or src_center[1] >= col - radius)
             out_of_boundary = true;
-        if (dist_center[0] < radius or dist_center[1] < radius or dist_center[0] > row - radius or dist_center[1] > col - radius)
+        if (dist_center[0] < radius or dist_center[1] < radius or dist_center[0] >= row - radius or dist_center[1] >= col - radius)
             out_of_boundary = true;
 
 		if (out_of_boundary == false)
@@ -1279,9 +1202,9 @@ void post_processBlock(uchar *dsrc, uchar *ddist, int *motion_Mat ,int src_rows 
 		int dist_center[2] = {current_rows*block_size+radius+int(candidate[index*2 + 1]*0.5), current_cols*block_size+radius+int(candidate[index*2]*0.5)};
 
         bool out_of_boundary(false);
-        if (src_center[0] < radius or src_center[1] < radius or src_center[0] > row - radius or src_center[1] > col - radius)
+        if (src_center[0] < radius or src_center[1] < radius or src_center[0] >= row - radius or src_center[1] >= col - radius)
             out_of_boundary = true;
-        if (dist_center[0] < radius or dist_center[1] < radius or dist_center[0] > row - radius or dist_center[1] > col - radius)
+        if (dist_center[0] < radius or dist_center[1] < radius or dist_center[0] >= row - radius or dist_center[1] >= col - radius)
             out_of_boundary = true;
 
 		if (out_of_boundary == false)
@@ -1422,14 +1345,14 @@ void tdrs_both(Mat &src, Mat &dist, Mat &src_image, Mat &IF_image, Mat &dist_ima
 	//FORWARD:	pmm --> current ;		plmm --> last frame
     int *pmm_f, *plmm_f;
     pmm_f = new int[size];
-    memcpy(pmm_f, motion_map_forward, size*sizeof(int));
+    //memcpy(pmm_f, motion_map_forward, size*sizeof(int));
     plmm_f = new int[size];
     memcpy(plmm_f, last_motion_forward, size*sizeof(int));
 
 	//BACKWARD:	pmm --> current ;		plmm --> last frame
     int *pmm_b, *plmm_b;
     pmm_b = new int[size];
-    memcpy(pmm_b, motion_map_backward, size*sizeof(int));
+    //memcpy(pmm_b, motion_map_backward, size*sizeof(int));
     plmm_b = new int[size];
     memcpy(plmm_b, last_motion_backward, size*sizeof(int));
 
@@ -1464,21 +1387,21 @@ void tdrs_both(Mat &src, Mat &dist, Mat &src_image, Mat &IF_image, Mat &dist_ima
 	//Post-process the ME
 	post_processME(dsrc, ddist, pmm_f, row, col);
 	post_processME(ddist, dsrc, pmm_b, row, col);
-
+	
+	//mv mean
+	//MV_without_abnormal(pmm_f,row,col);
+	//MV_without_abnormal(pmm_b,row,col);
 
 	//select the better SAD
 	select_sad(dsrc, ddist, pmm_f, pmm_b, pmm_better_sad_f, sad_flag_map ,row, col);
-	
-	//mv mean
-	//MV_without_abnormal(pmm_better_sad_f,row,col);
 
 	//change the value from pmm_better_sad_f to pmm_better_sad_b
-	//memcpy(pmm_better_sad_b, pmm_better_sad_f, size*sizeof(int));
-	//for (int i = 0; i < size; i++)
-	//{
-	//	*(pmm_better_sad_b+i) = -*(pmm_better_sad_b+i);
+	memcpy(pmm_better_sad_b, pmm_better_sad_f, size*sizeof(int));
+	for (int i = 0; i < size; i++)
+	{
+		*(pmm_better_sad_b+i) = -*(pmm_better_sad_b+i);
 		//cout << *(pmm_f+i) << "	";
-	//}
+	}
 	
 
     //update last_motion for next frame
@@ -1486,7 +1409,8 @@ void tdrs_both(Mat &src, Mat &dist, Mat &src_image, Mat &IF_image, Mat &dist_ima
     memcpy(last_motion_backward, pmm_b, size*sizeof(int));
 
 	//IF_bothward
-	general_IF_MC(src_image,IF_image,dist_image,pmm_better_sad_f, sad_flag_map);
+	general_IF_MC_self(src_image, IF_image, dist_image, pmm_f, pmm_b ,sad_flag_map);
+	//general_IF_MC(src_image, IF_image, dist_image, last_motion_forward,sad_flag_map);
 	//general_IF_MC_Forward(src_image,IF_image,dist_image,last_motion_forward);
 	//draw_arrow(src_image, dist_image, IF_image, last_motion_forward);
 
@@ -1543,7 +1467,8 @@ int main(int argc, char**argv)
     while (1)
     {
         chrono::steady_clock::time_point start = chrono::steady_clock::now();
-        Mat gsrc, gdist, out, IF_img;
+        Mat gsrc, gdist, out;
+		Mat IF_img(src.rows,src.cols,CV_8UC3,Scalar(0));
 
         cap >> dist;
 		//empth --> the last frame in the video
@@ -1556,7 +1481,7 @@ int main(int argc, char**argv)
         cvtColor(src, gsrc, CV_BGR2GRAY);
         cvtColor(dist, gdist, CV_BGR2GRAY);
 
-		IF_img = src.clone();
+		IF_img = dist.clone();
 		//tdrs_MC(gsrc, gdist, out, src, IF_img, motion_map);
 		//bothward: FORWARD and BACKWARD
 		tdrs_both(gsrc, gdist, src, IF_img, out,motion_map_forward, motion_map_backward);
@@ -1579,14 +1504,11 @@ int main(int argc, char**argv)
         record.write(out);
 
 		//save the image of the output
-		//imwrite(boost::str(boost::format("video/%04d_a.jpg") %cnt).c_str(), IF_img);
-		//imwrite(boost::str(boost::format("video/%04d_b.jpg") %cnt).c_str(), out);	
+		imwrite(boost::str(boost::format("video/%04d_a.jpg") %cnt).c_str(), IF_img);
+		imwrite(boost::str(boost::format("video/%04d_b.jpg") %cnt).c_str(), out);	
 
         imshow("motion", IF_img);
-		//imshow("motion", out);
-		//waitKey(0);
-
-        if (char(waitKey(1)) == 'q')
+        if (char(waitKey(1000/cap.get(CV_CAP_PROP_FPS ))) == 'q')
             break;
     }
     delete [] motion_map_forward; delete [] motion_map_backward;
